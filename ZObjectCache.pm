@@ -3,7 +3,6 @@ package Games::Rezrov::ZObjectCache;
 use strict;
 
 use Games::Rezrov::MethodMaker qw(
-				  story
 				  names
 				  rooms
 				  items
@@ -18,10 +17,8 @@ use SelfLoader;
 __DATA__
 
 sub new {
-  my ($type, $story) = @_;
   my $self = {};
-  bless $self, $type;
-  $self->story($story);
+  bless $self, shift;
   $self->cache([]);
   return $self;
 }
@@ -30,18 +27,17 @@ sub load_names {
   my $self = shift;
   return if $self->names();
 
-  my $story = $self->story();
-  my $header = $story->header();
+  my $header = Games::Rezrov::StoryFile::header();
   my $max_objects = $header->max_objects();
   
   my ($o, $desc, $ref);
-  my $ztext = $story->ztext();
+  my $ztext = Games::Rezrov::StoryFile::ztext();
   my (@names, %rooms, %items);
 
   my $i;
   for ($i=1; $i <= $max_objects; $i++) {
     # decode the object table
-    $o = new Games::Rezrov::ZObject($i, $story);
+    $o = new Games::Rezrov::ZObject($i);
     $desc = $o->print($ztext);
     if ($$desc =~ /\s{4,}/) {
       # several sequential whitespace characters; consider the end.
@@ -65,7 +61,6 @@ sub load_names {
 	  # 
 	  # Grue repellent is an item, but is named like rooms are.
 	  #  
-#	  $story->write_text(sprintf "hey: %s\n", ${$o->print});
           $items{$i} = 1;
         } else {
           $rooms{$i} = 1;
@@ -210,7 +205,7 @@ sub get {
     return $cache->[$_[1]];
   } else {
 #    printf STDERR "new instance for %s\n", $_[1];
-    my $zo = new Games::Rezrov::ZObject($_[1], $_[0]->story());
+    my $zo = new Games::Rezrov::ZObject($_[1]);
     $cache->[$_[1]] = $zo;
     return $zo;
   }
@@ -233,14 +228,16 @@ sub get_items {
 
 sub is_room {
   my ($self, $id) = @_;
-  return exists $self->rooms()->{$id};
-}
-
-sub is_player {
-  # does the given ID refer to the player object?
-  my ($self, $id) = @_;
-  my $pid = $self->story()->player_object();
-  return defined $pid ? $pid == $id : undef;
+  my $rooms = $self->rooms();
+  if ($rooms) {
+    # we've fully analyzed the object table
+    return exists $rooms->{$id};
+  } else {
+    # guess
+    my $zo = $self->get($id);
+    my $desc = $zo->print();
+    return Games::Rezrov::StoryFile::likely_location($desc);
+  }
 }
 
 1;

@@ -8,18 +8,20 @@ use Carp qw(cluck);
 @Games::Rezrov::ZIO_Curses::ISA = qw(Games::Rezrov::ZIO_Generic);
 
 use Curses;
+
+use Games::Rezrov::ZOptions;
 use Games::Rezrov::ZIO_Generic;
 use Games::Rezrov::ZConst;
 use Games::Rezrov::ZIO_Tools;
 use Games::Rezrov::MethodMaker qw(
-			   need_endwin
-			   story
-			   custom_status_colors
-			   rows
-			   columns
-			   term_readline
-			   color_pairs
-			);
+				  need_endwin
+				  custom_status_colors
+				  rows
+				  columns
+				  term_readline
+				  color_pairs
+				  zfont
+				 );
 
 my $w_main;
 my %COLORMAP = (black => COLOR_BLACK,
@@ -47,7 +49,7 @@ sub new {
   # ...actually it's more like Curses.pm doesn't autoconfigure correctly
   # under dec_osf  :(
 
-  if ($options{"readline"} and find_module("Term/ReadLine.pm")) {
+  if ($options{"readline"} and find_module('Term::ReadLine')) {
     my $tr = $self->term_readline(new Term::ReadLine 'what?', \*main::STDIN, \*main::STDOUT);
     $tr->ornaments(0);
   }
@@ -60,11 +62,18 @@ sub new {
 
   $w_main = newwin($rows, $columns, 0, 0);
   # create main window
+  $w_main->keypad(1);
 
   $self->color_pairs({});
   $self->init_colors(\%options);
   
+  $self->zfont(Games::Rezrov::ZConst::FONT_NORMAL);
+
   return $self;
+}
+
+sub groks_font_3 {
+  return 1;
 }
 
 sub can_use_color {
@@ -78,10 +87,9 @@ sub update {
 
 sub set_version {
   # called by the game
-  my ($self, $story, $status_needed, $callback) = @_;
-  $self->story($story);
-  $story->rows($self->rows());
-  $story->columns($self->columns());
+  my ($self, $status_needed, $callback) = @_;
+  Games::Rezrov::StoryFile::rows($self->rows);
+  Games::Rezrov::StoryFile::columns($self->columns);
   $self->clear_screen();
   scrollok($w_main, 1);
   noecho();
@@ -116,13 +124,51 @@ sub newline {
   # use autoscrolling
   $w_main->addstr("\n");
   # broken: what if not lower window??
-  $_[0]->story()->register_newline();
+  Games::Rezrov::StoryFile::register_newline();
   update() if Games::Rezrov::ZOptions::MAXIMUM_SCROLLING;
 }
 
 sub write_zchar {
   # write an unbuffered z-char to the screen
-  $w_main->addch(chr($_[1]));
+  if ($_[0]->zfont() == 3) {
+    if ($_[1] == 32 || $_[1] == 37) {
+      $w_main->addch(" ");
+    } elsif ($_[1] == 35 || $_[1] == 50 || $_[1] == 52 || $_[1] == 67 || $_[1] == 69) {
+      $w_main->addch("/");
+    } elsif ($_[1] == 36 || $_[1] == 51 || $_[1] == 53 || $_[1] == 68 || $_[1] == 70) {
+      $w_main->addch('\\');
+    } elsif ($_[1] == 46) {
+      $w_main->addch(ACS_LLCORNER);
+    } elsif ($_[1] == 47) {
+      $w_main->addch(ACS_ULCORNER);
+    } elsif ($_[1] == 48) {
+      $w_main->addch(ACS_URCORNER);
+    } elsif ($_[1] == 49) {
+      $w_main->addch(ACS_LRCORNER);
+    } elsif ($_[1] == 42) {
+      $w_main->addch(ACS_BTEE);
+    } elsif ($_[1] == 43) {
+      $w_main->addch(ACS_TTEE);
+    } elsif ($_[1] == 44) {
+      $w_main->addch(ACS_LTEE);
+    } elsif ($_[1] == 45) {
+      $w_main->addch(ACS_RTEE);
+    } elsif ($_[1] == 54) {
+      $w_main->addch(ACS_BLOCK);
+    } elsif ($_[1] == 38 || $_[1] == 39 || $_[1] == 61 || $_[1] == 62) {
+      $w_main->addch(ACS_HLINE);
+    } elsif ($_[1] == 40 || $_[1] == 41 || $_[1] == 59 || $_[1] == 60) {
+      $w_main->addch(ACS_VLINE);
+    } elsif ($_[1] == 90) {
+      $w_main->addch("X");
+    } elsif ($_[1] == 96) {
+      $w_main->addch("?");
+    } else {
+      $w_main->addch(ACS_BULLET);
+    }
+  } else {
+    $w_main->addch(chr($_[1]));
+  }
 }
 
 sub status_hook {
@@ -168,7 +214,7 @@ sub get_input {
     # a newline/scroll with user input (ie DEC OSF)
     
     if ($self->term_readline()) {
-      $result = $self->term_readline()->readline($self->story()->prompt_buffer());
+      $result = $self->term_readline()->readline(Games::Rezrov::StoryFile::prompt_buffer());
       # this doesn't work with v5+ preloaded input
     } else {
 #      $w_main->getnstr($result, $max);
@@ -228,6 +274,19 @@ sub get_char {
 #  noraw();
   nocbreak();
   echo();
+  if ($char =~ /^\d+$/) {
+    # a numeric code was returned; see if we can translate it into a
+    # z-code meta key
+    if ($char == KEY_UP) {
+      $char = chr(Games::Rezrov::ZConst::Z_UP);
+    } elsif ($char == KEY_DOWN) {
+      $char = chr(Games::Rezrov::ZConst::Z_DOWN);
+    } elsif ($char == KEY_LEFT) {
+      $char = chr(Games::Rezrov::ZConst::Z_LEFT);
+    } elsif ($char == KEY_RIGHT) {
+      $char = chr(Games::Rezrov::ZConst::Z_RIGHT);
+    }
+  }
   return $char;
 }
 
@@ -333,6 +392,10 @@ sub do_colors {
     #  printf STDERR "want %s/%s = %d\n", $fg, $bg, $pair;
     $w_main->bkgdset(COLOR_PAIR($pair));
   }
+}
+
+sub set_font {
+  return $_[0]->zfont($_[1]);
 }
 
 

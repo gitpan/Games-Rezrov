@@ -37,7 +37,10 @@ use constant INPUT_FILE => 1;
 # 3.8, table 2:
 use constant Z_NEWLINE => 13;
 use constant Z_DELETE => 8;
-
+use constant Z_UP => 129;
+use constant Z_DOWN => 130;
+use constant Z_LEFT => 131;
+use constant Z_RIGHT => 132;
 
 # 8.3.1:
 use constant COLOR_CURRENT => 0;

@@ -11,8 +11,6 @@ use Games::Rezrov::ZConst;
 use Games::Rezrov::MethodMaker qw(
 			   sfg
 			   sbg
-			   
-			   story
 			   );
 
 use Carp qw(cluck);
@@ -29,12 +27,12 @@ my ($IN, $OUT);
 
 my ($rows, $columns);
 
-use FileHandle;
-
 if (DEBUG) {
   # debugging; tough to redirect STDERR under win32 :(
   open(LOG, ">zio.log") || die;
-  LOG->autoflush(1);
+  select(LOG);
+  $|=1;
+  select(STDOUT);
 }
 
 my %FOREGROUND = (
@@ -137,10 +135,9 @@ sub update {
 
 sub set_version {
   # called by the game
-  my ($self, $story, $status_needed, $callback) = @_;
-  $self->story($story);
-  $story->rows($rows);
-  $story->columns($columns);
+  my ($self, $status_needed, $callback) = @_;
+  Games::Rezrov::StoryFile::rows($rows);
+  Games::Rezrov::StoryFile::columns($columns);
   return 0;
 }
 
@@ -174,11 +171,12 @@ sub newline {
       # ugh: we have to specify the clipping region, or else
       # Win32::Console barfs about uninitialized variables (with -w)
   }
-  $_[0]->story()->register_newline();
+  Games::Rezrov::StoryFile::register_newline();
   $_[0]->absolute_move(0, $y);
 }
 
 sub write_zchar {
+#    log_it("wzchar: " . chr($_[1]));
   $OUT->Attr($_[0]->get_attr());
   $OUT->Write(chr($_[1]));
 }
@@ -209,10 +207,30 @@ sub get_input {
     my ($code, $char);
     while (1) {
 	@event = $IN->Input();
+	my $known;
 	if ($event[0] == 1 and $event[1]) {
 	    # a key pressed
 	    $code = $event[5];
-	    if ($single_char and $code >= 1 and $code <= 127) {
+	    if ($code == 0) {
+		# non-character key pressed
+		if ($event[3] == 38) {
+		    $code = Games::Rezrov::ZConst::Z_UP;
+		    $known = 1;
+		} elsif ($event[3] == 40) {
+		    $code = Games::Rezrov::ZConst::Z_DOWN;
+		    $known = 1;
+		} elsif ($event[3] == 37) {
+		    $code = Games::Rezrov::ZConst::Z_LEFT;
+		    $known = 1;
+		} elsif ($event[3] == 39) {
+		    $code = Games::Rezrov::ZConst::Z_RIGHT;
+		    $known = 1;
+		} else {
+		    log_it(sprintf "got unknown non-char: %s", join ",", @event);
+		}
+	    }
+
+	    if ($single_char and ($known or ($code >= 1 and $code <= 127))) {
 		return chr($code);
 	    } elsif ($code == Games::Rezrov::ZConst::ASCII_BS) {
 		if (length($buf) > 0) {
@@ -279,7 +297,7 @@ sub get_attr {
     # return attribute code for color/style currently in effect.
     my ($self, $mask) = @_;
     
-    $mask = $self->story()->font_mask() unless defined($mask);
+    $mask = Games::Rezrov::StoryFile::font_mask() unless defined($mask);
     # might be called with an override
     my ($fg, $bg);
     if ($in_status) {

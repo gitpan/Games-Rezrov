@@ -10,6 +10,7 @@ use Games::Rezrov::ZObject;
 use Games::Rezrov::ZText;
 use Games::Rezrov::ZConst;
 use Games::Rezrov::ZObjectStatus;
+use Games::Rezrov::Inliner;
 
 use Games::Rezrov::MethodMaker ([],
 			 qw(
@@ -20,7 +21,6 @@ use Games::Rezrov::MethodMaker ([],
 			    separators
 			    encoded_word_length
 			    version
-			    story
 			    decoded_by_word
 			    decoded_by_address
 			    object_cache
@@ -31,6 +31,7 @@ use constant ZORK_1 => ("Zork I", 88, "840726", 41257);
 use constant ZORK_2 => ("Zork II", 48, "840904", 55449);
 use constant ZORK_3 => ("Zork III", 17, "840727", 11898);
 use constant INFIDEL => ("Infidel", 22, "830916", 16674);
+use constant ZTUU => ("Zork: The Undiscovered Underground", 16, 970828, 4485);
 
 use constant SNIDE_MESSAGES => (
 				'A hollow voice says, "cretin."',
@@ -101,11 +102,11 @@ use constant BANISH_MESSAGES => (
 
 use constant BANISH_CONTAINER_MESSAGES => (
 					   'The %s flickers with a faint blue glow.',
-					   'The %s shimmers briefly.'
+					   'The %s shimmers briefly...'
 				 );
 
 use constant BANISH_SELF_MESSAGES => (
-				      'You feel a tickle.',
+				      'You feel a tickle...',
 				      'Your load feels lighter.',
 				      '%s?  What %s?',
 				 );
@@ -138,6 +139,9 @@ use constant HELP_GENERIC_URLS => (
 						    "travis",
 						    "bickle",
 						    "tail",
+						    "#sa",
+						    "#dta",
+						    "#dat", "spiel",
 						   );
 
 %Games::Rezrov::ZDict::ALIASES = (
@@ -147,19 +151,21 @@ use constant HELP_GENERIC_URLS => (
 			   "l" => "look",
 			  );
 
-1;
-__DATA__
-
+my $INLINE_CODE = '
 sub new {
-  my ($type, $story) = @_;
+  my ($type, $addr) = @_;
   my $self = [];
   bless $self, $type;
-  $self->story($story);
-  $self->version($story->version());
-  $self->ztext($story->ztext());
-  my $header = $story->header();
+  $self->version(Games::Rezrov::StoryFile::version());
+  $self->ztext(Games::Rezrov::StoryFile::ztext());
+  my $header = Games::Rezrov::StoryFile::header();
   $self->encoded_word_length($header->encoded_word_length());
-  my $dp = $header->dictionary_address();
+  my $dp;
+  if ($addr) {
+    $dp = $addr;
+  } else {
+    $dp = $header->dictionary_address();
+  }
   
   $self->decoded_by_word({});
   $self->decoded_by_address({});
@@ -167,16 +173,16 @@ sub new {
   # 
   #  get token separators
   #
-  my $sep_count = $story->get_byte_at($dp++);
+  my $sep_count = GET_BYTE_AT($dp++);
   my %separators;
   for (my $i=0; $i < $sep_count; $i++) {
-    $separators{chr($story->get_byte_at($dp++))} = 1;
+    $separators{chr(GET_BYTE_AT($dp++))} = 1;
   }
   $self->separators(\%separators);
   
-  $self->entry_length($story->get_byte_at($dp++));
+  $self->entry_length(GET_BYTE_AT($dp++));
   # number of bytes for each encoded word
-  $self->entry_count($story->get_word_at($dp));
+  $self->entry_count(Games::Rezrov::StoryFile::get_word_at($dp));
   # number of words in the dictionary
   $dp += 2;
 
@@ -188,16 +194,28 @@ sub new {
   return $self;
 }
 
+';
+
+Games::Rezrov::Inliner::inline(\$INLINE_CODE);
+#print $INLINE_CODE;
+#die;
+eval $INLINE_CODE;
+undef $INLINE_CODE;
+
+
+1;
+
+__DATA__
+
 sub save_buffer {
   # copy the input buffer to story memory.
   # This may be called internally during oops emulation.
   my ($self, $buf, $text_address) = @_;
   my $mem_offset;
-  my $story = $self->story();
   my $z_version = $self->version();
   my $len = length $buf;
   if ($z_version >= 5) {
-    $story->set_byte_at($text_address + 1, $len);
+    Games::Rezrov::StoryFile::set_byte_at($text_address + 1, $len);
     $mem_offset = $text_address + 2;
   } else {
     $mem_offset = $text_address + 1;
@@ -205,19 +223,21 @@ sub save_buffer {
   
   for (my $i=0; $i < $len; $i++, $mem_offset++) {
     # copy the buffer to memory
-    $story->set_byte_at($mem_offset, ord substr($buf,$i,1));
+    Games::Rezrov::StoryFile::set_byte_at($mem_offset, ord substr($buf,$i,1));
   }
-  $story->set_byte_at($mem_offset, 0) if ($z_version <= 4);
+  Games::Rezrov::StoryFile::set_byte_at($mem_offset, 0) if ($z_version <= 4);
   # terminate the line
 }
 
 sub tokenize_line {
-  my ($self, $text_address, $token_address,
-      $text_len, $oops_word) = @_;
+  my ($self, $text_address, $token_address, %options) = @_;
+#      $text_len, $oops_word) = @_;
+  my $text_len = $options{"-len"};
+  my $oops_word = $options{"-oops"};
+  my $flag = $options{"-flag"} || 0;
   
 #  my $b1 = new Benchmark();
-  my $story = $self->story();
-  my $max_tokens = $story->get_byte_at($token_address);
+  my $max_tokens = Games::Rezrov::StoryFile::get_byte_at($token_address);
   my $token_p = $token_address + 2;
   # pointer to location where token data will be written
   my $separators = $self->separators();
@@ -228,12 +248,12 @@ sub tokenize_line {
   my $text_p = $text_address + 1;
   # skip past max bytes enterable
   if ($self->version() >= 5) {
-    $text_len = $story->get_byte_at($text_p) unless defined $text_len;
+    $text_len = Games::Rezrov::StoryFile::get_byte_at($text_p) unless defined $text_len;
     # needed if called from tokenize opcode (VAR 0x1b)
     $text_p++;
     # move pointer past length of entered text.
   }
-  my $raw_input = $story->get_string_at($text_p, $text_len);
+  my $raw_input = Games::Rezrov::StoryFile::get_string_at($text_p, $text_len);
 
   my $text_end = $text_p + $text_len;
   # we're passed the length because in <= v4 we would have to count
@@ -254,7 +274,7 @@ sub tokenize_line {
       $all_done = 1;
     } else {
       $start_offset = $text_p unless $start_offset;
-      $c = chr($story->get_byte_at($text_p++));
+      $c = chr(Games::Rezrov::StoryFile::get_byte_at($text_p++));
       if ($c eq ' ') {
 	# a space character:
 	if ($token) {
@@ -298,10 +318,10 @@ sub tokenize_line {
     # shameless self-promotion
     unless ($self->get_dictionary_address($1)) {
       # don't do anything if name is in dictionary (e.g. Suspect has a Michael)
-      $story->write_text($self->random_message(SHAMELESS_MESSAGES));
-      $story->newline();
-      $story->newline();
-      $story->suppress_hack();
+      $self->write_text($self->random_message(SHAMELESS_MESSAGES));
+      $self->newline();
+      $self->newline();
+      $self->suppress_output();
       return;
     }
   }
@@ -321,7 +341,7 @@ sub tokenize_line {
       my $addr = $self->get_dictionary_address($token);
       if ($addr == 0) {
 	if (Games::Rezrov::ZOptions::EMULATE_NOTIFY() and $token eq "notify") {
-	  $story->notify_toggle();
+	  $self->notify_toggle();
 	} elsif (Games::Rezrov::ZOptions::EMULATE_HELP() and $token eq "help") {
 	  $self->help();
 	} elsif (Games::Rezrov::ZOptions::EMULATE_OOPS() and ($oops_word or
@@ -332,9 +352,12 @@ sub tokenize_line {
 	    $addr = $self->get_dictionary_address($oops_word);
 	  } else {
 	    # entered "oops"
-	    my $last_input = $story->last_input();
+	    my $last_input = Games::Rezrov::StoryFile::last_input();
 	    $self->save_buffer($last_input, $text_address);
-	    $self->tokenize_line($text_address, $token_address, length($last_input), $tokens[$ti + 1]->[0]);
+	    $self->tokenize_line($text_address,
+				 $token_address,
+				 "-len" => length($last_input),
+				 "-oops" => $tokens[$ti + 1]->[0]);
 	    return;
 	  }
 	} elsif (Games::Rezrov::ZOptions::MAGIC() and exists $Games::Rezrov::ZDict::MAGIC_WORDS{$untrunc_token}) {
@@ -345,7 +368,7 @@ sub tokenize_line {
 	# is broken into 3 tokens: "Mrs", ".", and "Robner".  Joined
 	# this is "Mrs . Robner", which doesn't match anything in the object
 	# table.
-#	print STDERR "magic: $what\n";
+#	print STDERR "magic: -$what-\n";
 	  $self->magic($untrunc_token, $what);
 #		       $ti < @tokens - 1 ?
 #		       join " ", map {$_->[0]} @tokens[$ti + 1 .. $#tokens]
@@ -359,42 +382,49 @@ sub tokenize_line {
 		 $token eq "#comm") {
 	  if ($token eq "#comm") {
 	    # play back commands
-	    $story->input_stream(Games::Rezrov::ZConst::INPUT_FILE);
+	    Games::Rezrov::StoryFile::input_stream(Games::Rezrov::ZConst::INPUT_FILE);
 	  } else {
-	    $story->output_stream($token eq "#reco" ? Games::Rezrov::ZConst::STREAM_COMMANDS : - Games::Rezrov::ZConst::STREAM_COMMANDS);
+	    Games::Rezrov::StoryFile::output_stream($token eq "#reco" ? Games::Rezrov::ZConst::STREAM_COMMANDS : - Games::Rezrov::ZConst::STREAM_COMMANDS);
 	  }
-	  $story->newline();
-	  $story->suppress_hack();
+	  $self->newline();
+	  $self->suppress_output();
 	} elsif ($token eq "#cheat") {
 	  my $status = !(Games::Rezrov::ZOptions::MAGIC());
 	  Games::Rezrov::ZOptions::MAGIC($status);
-	  $story->write_text(sprintf "Cheating is now %sabled.", $status ? "en" : "dis");
-	  $story->newline();
-	  $story->newline();
-	  $story->suppress_hack();
+	  $self->write_text(sprintf "Cheating is now %sabled.", $status ? "en" : "dis");
+	  $self->newline();
+	  $self->newline();
+	  $self->suppress_output();
 	} elsif ($token eq "rooms") {
 	  # print room names
 	  $self->dump_objects(2);
-	  $story->newline();
-	  $story->suppress_hack();
+	  $self->newline();
+	  $self->suppress_output();
 	} elsif ($token eq "items") {
 	  # print item names
 	  $self->dump_objects(3);
-	  $story->newline();
-	  $story->suppress_hack();
+	  $self->newline();
+	  $self->suppress_output();
 	}
       }
-      $story->set_word_at($token_p, $addr);
-      $story->set_byte_at($token_p + 2, length $untrunc_token);
-      $story->set_byte_at($token_p + 3, $offset);
+    
+      if ($flag and $addr == 0) {
+	# sect15.html#tokenise:
+        # when $flag is set, don't touch entries not in the dictionary.
+	1;
+      } else {
+        Games::Rezrov::StoryFile::set_word_at($token_p, $addr);
+        Games::Rezrov::StoryFile::set_byte_at($token_p + 2, length $untrunc_token);
+        Games::Rezrov::StoryFile::set_byte_at($token_p + 3, $offset);
+      }
       $token_p += 4;
     } else {
-      $story->write_text("Too many tokens; ignoring $token");
-      $story->newline();
+      $self->write_text("Too many tokens; ignoring $token");
+      $self->newline();
     }
   }
 
-  $story->set_byte_at($token_address + 1, $wrote_tokens);
+  Games::Rezrov::StoryFile::set_byte_at($token_address + 1, $wrote_tokens);
   # record number of tokens written
 
 #  my $b2 = new Benchmark();
@@ -412,7 +442,8 @@ sub get_dictionary_address {
   #   faster, but I'm too Lazy and Impatient right now to do it that
   #   way.  Contains ugly hacks for non-alphanumeric "words".
   #
-
+  # alas, certain v5 opcodes require text encoding.  Tomorrow  :)
+  #
   my $self = $_[0];
   my $token = lc($_[1]);
 
@@ -520,20 +551,20 @@ sub magic {
   #
   
   my ($self, $token, $what) = @_;
-  my $story = $self->story();
   my $object_cache = $self->get_object_cache();
 
+  my $player_object = Games::Rezrov::StoryFile::player_object();
+  my $current_room = Games::Rezrov::StoryFile::current_room();
+
   if ($what) {
-    my $po = $story->player_object();
-    my $cr = $story->current_room();
-    if ($po and $what =~ /^(me|self)$/i) {
+    if ($player_object and $what =~ /^(me|self)$/i) {
       # for the purposes of these commands, consider "me" and "self"
       # equivalent to the player object (whatever that's called)
-      my $desc = $object_cache->print($po);
+      my $desc = $object_cache->print($player_object);
       $what = $$desc;
-    } elsif ($cr and $what =~ /^here$/) {
+    } elsif ($current_room and $what =~ /^here$/) {
       # likewise consider "here" to be the current room
-      my $desc = $object_cache->print($cr);
+      my $desc = $object_cache->print($current_room);
       $what = $$desc;
     }
   }
@@ -543,20 +574,20 @@ sub magic {
   if (0 and $token eq "fbg") {
     # can we make arbitrary things glow with a faint blue glow?
     # (nope)
-    my $zo = new Games::Rezrov::ZObject(160, $story);
+    my $zo = new Games::Rezrov::ZObject(160);
     # 160=mailbox
     my $zp = $zo->get_property(12);
-    $story->write_text($zp->property_exists() ? "yes" : "no");
+    $self->write_text($zp->property_exists() ? "yes" : "no");
   } elsif (0 and $token eq "fbg2") {
     # do all objects with "blue glow" property behave the same?
     my $object_cache = $self->get_object_cache();
     for (my $i = 1; $i <= $object_cache->last_object(); $i++) {
-      my $zo = new Games::Rezrov::ZObject($i, $story);
+      my $zo = new Games::Rezrov::ZObject($i);
       my $zp = $zo->get_property(12);
       if ($zp->property_exists()) {
 	$zp->set_value(3);
-	$story->write_text(${$zo->print()});
-	$story->newline();
+	$self->write_text(${$zo->print()});
+	$self->newline();
       }
     }
   } elsif ($token eq "omap") {
@@ -567,20 +598,20 @@ sub magic {
     $self->dump_dictionary($what);
   } elsif ($token eq "embezzle") {
     # manipulate game score
-    if ($story->version() > 3) {
-      $story->write_text("Sorry, this trick only works in version 3 games.");
-    } elsif ($story->header()->is_time_game()) {
-      $story->write_text("Sorry, this trick doesn't work in \"time\" games.");
-    } elsif ($what) {
+    if ($self->version() > 3) {
+      $self->write_text("Sorry, this trick only works in version 3 games.");
+    } elsif (Games::Rezrov::StoryFile::header()->is_time_game()) {
+      $self->write_text("Sorry, this trick doesn't work in \"time\" games.");
+    } elsif (length $what) {
       if ($what =~ /^-?\d+$/) {
-	$story->set_global_var(1, $what);
-	$story->write_text("\"Clickety click...\"");
+	Games::Rezrov::StoryFile::set_global_var(1, $what);
+	$self->write_text("\"Clickety click...\"");
 	# BOFH
       } else {
-	$story->write_text("Is that a score on your planet?");
+	$self->write_text("Is that a score on your planet?");
       }
     } else {
-      $story->write_text("Tell me what to set your score to.");
+      $self->write_text("Tell me what to set your score to.");
     }
   } elsif ($token =~ "#?teleport") {
     $self->teleport($what);
@@ -590,17 +621,22 @@ sub magic {
     $self->frotz($what);
   } elsif ($token eq "tail") {
     $self->tail($what);
+  } elsif ($token eq "#sa") {
+    $self->set_attr($what);
+  } elsif ($token eq "#dta") {
+    $self->decode_text_at($what);
+  } elsif ($token eq "#dat" or $token eq "spiel") {
+    $self->decode_all_text(split /\s+/, $what);
   } else {
     # pilfer or bamf
     my @hits = $what ? $object_cache->find($what, "-room" => 0) : ();
     if (@hits > 1) {
-      $story->write_text(sprintf 'Hmm, which do you mean: %s?',
+      $self->write_text(sprintf 'Hmm, which do you mean: %s?',
 			 nice_list(sort map {$_->[1]} @hits));
     } elsif (@hits == 1) {
       my ($id, $desc) = @{$hits[0]};
       my $zo = $object_cache->get($id);
       my $zstat = new Games::Rezrov::ZObjectStatus($hits[0]->[0],
-						   $story,
 						   $object_cache);
 
       if ($token eq "bamf") {
@@ -608,21 +644,21 @@ sub magic {
 	#  Make an object disappear
 	#
 	if ($zstat->is_player()) {
-	  $story->write_text("You are beyond help already.");
+	  $self->write_text("You are beyond help already.");
 	} elsif ($zstat->in_current_room()) {
 	  if ($zstat->in_inventory()) {
-	    $story->write_text(ucfirst(sprintf $self->random_message(BANISH_SELF_MESSAGES), $desc, $desc));
+	    $self->write_text(ucfirst(sprintf $self->random_message(BANISH_SELF_MESSAGES), $desc, $desc));
 	  } elsif ($zstat->is_toplevel_child()) {
 	    # top-level, should be visible
-	    $story->write_text(sprintf $self->random_message(BANISH_MESSAGES), $desc);
+	    $self->write_text(sprintf $self->random_message(BANISH_MESSAGES), $desc);
 	  } else {
 	    # in something else
-	    $story->write_text(sprintf $self->random_message(BANISH_CONTAINER_MESSAGES), ${$zstat->toplevel_child()->print()});
+	    $self->write_text(sprintf $self->random_message(BANISH_CONTAINER_MESSAGES), ${$zstat->toplevel_child()->print()});
 	  }
-	  $story->insert_obj($id, 0);
+	  $self->move_object($id, 0);
 	  # set the object's parent to zero (nothing)
 	} else {
-	  $story->write_text(sprintf "I don't see any %s here.", ${$zo->print()});
+	  $self->write_text(sprintf "I don't see any %s here.", ${$zo->print()});
 	}
       } elsif ($token eq "pilfer") {
 	#
@@ -630,70 +666,69 @@ sub magic {
 	#  (move it to this room and submit "take" command)
 	#
 	my $proceed = 0;
-	if (!$story->player_object()) {
-	  $story->write_text("Sorry, I'm not sure where you are just yet...");
+	if (!$player_object or !Games::Rezrov::StoryFile::current_room()) {
+	  $self->write_text("Sorry, I'm a little disoriented right now...");
 	} elsif ($zstat->is_player()) {
 	  if ($desc eq "cretin") {
-	    $story->write_text("\"cretin\" suits you, I see.");
+	    $self->write_text("\"cretin\" suits you, I see.");
 	  } else {
-	    $story->write_text($self->random_message(SNIDE_MESSAGES));
+	    $self->write_text($self->random_message(SNIDE_MESSAGES));
 	  }
 	} elsif ($zstat->in_current_room()) {
 	  if ($zstat->in_inventory()) {
-	    $story->write_text($self->random_message(PILFER_SELF_MESSAGES));
+	    $self->write_text($self->random_message(PILFER_SELF_MESSAGES));
 	    $proceed = 1;
 	    # sometimes makes sense: pilfer canary from egg, even
 	    # when carrying it
 	  } elsif ($zstat->is_toplevel_child()) {
 	    # at top level in room (should already be visible)
-	    $story->write_text($self->random_message(SNIDE_MESSAGES));
-	    $story->newline();
-	    $story->write_text(sprintf "The %s seems unaffected.", $desc);
+	    $self->write_text($self->random_message(SNIDE_MESSAGES));
+	    $self->newline();
+	    $self->write_text(sprintf "The %s seems unaffected.", $desc);
 	  } else {
 	    # inside something else in this room
-	    $story->write_text(sprintf $self->random_message(PILFER_LOCAL_MESSAGES), ${$zstat->toplevel_child->print});
+	    $self->write_text(sprintf $self->random_message(PILFER_LOCAL_MESSAGES), ${$zstat->toplevel_child->print});
 	    $proceed = 1;
 	  }
 	} else {
-	  $story->write_text($self->random_message(PILFER_REMOTE_MESSAGES));
+	  $self->write_text($self->random_message(PILFER_REMOTE_MESSAGES));
 	  $proceed = 1;
         }
         if ($proceed) {
-	  $story->insert_obj($id, $story->current_room());
-	  # hee hee
+	  $self->move_object($id, $current_room);
 	  my $thing = (reverse(split /\s+/, $desc))[0];
 	  # if description is multiple words, use the last one.
           # example: zork 1, "jewel-encrusted egg" becomes "egg".
 	  # (parser doesn't understand "jewel-encrusted" part)
 	  # room for improvement: check to make sure this word
 	  # is in dictionary
-	  $story->push_command("take " . $thing);
+	  $self->steal_turn("take " . $thing);
 	  $just_one_newline = 1;
         }
       } else {
 	die "$token ?";
       }
     } elsif ($what) {
-$story->write_text(sprintf "I don't know what that is, though I have seen a %s that you might be interested in...", ${$object_cache->get_random()});
+$self->write_text(sprintf "I don't know what that is, though I have seen a %s that you might be interested in...", ${$object_cache->get_random()});
     } elsif ($token eq "pilfer") {
-      $story->write_text("Please tell me what you want to pilfer.");
+      $self->write_text("Please tell me what you want to pilfer.");
     } elsif ($token eq "bamf") {
-      $story->write_text("Please tell me what you want to make disappear.");
+      $self->write_text("Please tell me what you want to make disappear.");
     } else {
-      $story->write_text("Can you be more specific?");
+      $self->write_text("Can you be more specific?");
     }
   }
 
-  $story->newline();
-  $story->newline() unless $just_one_newline;
-  $story->suppress_hack();
+  $self->newline();
+  $self->newline() unless $just_one_newline;
+  $self->suppress_output();
   # suppress parser output ("I don't know the word XXX.");
 }
 
 sub get_object_cache {
   # FIX ME
   unless ($_[0]->object_cache()) {
-    my $cache = new Games::Rezrov::ZObjectCache($_[0]->story());
+    my $cache = new Games::Rezrov::ZObjectCache();
     $cache->load_names();
     $_[0]->object_cache($cache);
   }
@@ -727,7 +762,6 @@ sub nice_list {
 
 sub dump_dictionary {
   my ($self, $what) = @_;
-  my $story = $self->story();
   my $dict_start = $self->dictionary_word_start();
   my $ztext = $self->ztext();
   my $num_words = $self->entry_count();
@@ -744,8 +778,8 @@ sub dump_dictionary {
       $by_address->{$address} = $$word;
     }
   }
-  my $rows = $story->rows();
-  my $columns = $story->columns();
+  my $rows = Games::Rezrov::StoryFile::rows();
+  my $columns = Games::Rezrov::StoryFile::columns();
   my $len = $self->encoded_word_length();
   my $fit = int($columns / ($len + 2));
   my $fmt = '%-' . $len . "s";
@@ -757,7 +791,7 @@ sub dump_dictionary {
   } else {
     my %temp = %{$by_name};
     if (Games::Rezrov::ZOptions::SHAMELESS()) {
-      my $token_len = $story->header()->encoded_word_length();
+      my $token_len = Games::Rezrov::StoryFile::header()->encoded_word_length();
       foreach my $word (qw(michael edmonson)) {
 	$word = substr($word,0,$token_len) if length $word > $token_len;
 	$temp{$word} = 1;
@@ -767,11 +801,11 @@ sub dump_dictionary {
   }
 
   foreach (@words) {
-    $story->write_text(sprintf $fmt, $_);
+    $self->write_text(sprintf $fmt, $_);
     if (++$wrote % $fit) {
-      $story->write_text("  ");
+      $self->write_text("  ");
     } else {
-      $story->newline();
+      $self->newline();
     }
   }
 }
@@ -779,7 +813,6 @@ sub dump_dictionary {
 sub dump_objects {
   my ($self, $type, $what) = @_;
   my $object_cache = $self->get_object_cache();
-  my $story = $self->story();
   my $last = $object_cache->last_object();
   
   $SIG{"__WARN__"} = sub {};
@@ -790,10 +823,9 @@ sub dump_objects {
     if ($what) {
       my @hits = $object_cache->find($what, "-all" => 1);
       if (@hits > 1) {
-	$story->write_text(sprintf 'Hmm, which do you mean: %s?', nice_list(map {$_->[1]} @hits));
+	$self->write_text(sprintf 'Hmm, which do you mean: %s?', nice_list(map {$_->[1]} @hits));
       } elsif (@hits == 1) {
 	my $zstat = new Games::Rezrov::ZObjectStatus($hits[0]->[0],
-						     $story,
 						     $object_cache);
 
 	if (my $pr = $zstat->parent_room()) {
@@ -802,7 +834,7 @@ sub dump_objects {
 	  $self->dump_object($object_cache->get($hits[0]->[0]), 1, 1);
 	}
       } else {
-	$story->write_text(sprintf 'I have no idea what you mean by "%s."', $what);
+	$self->write_text(sprintf 'I have no idea what you mean by "%s."', $what);
       }
     } else {
       my ($zo, $pid);
@@ -829,8 +861,8 @@ sub dump_objects {
   } else {
     # list rooms/items
     foreach ($type == 2 ? $object_cache->get_rooms() : $object_cache->get_items()) {
-      $story->write_text(" " . $_);
-      $story->newline();
+      $self->write_text(" " . $_);
+      $self->newline();
     }
   }
   #  delete $SIG{"__WARN__"};
@@ -841,7 +873,6 @@ sub dump_objects {
 
 sub dump_object {
   my ($self, $object, $indent, $no_sibs, $seen_ref) = @_;
-  my $story = $self->story();
 
   my $object_cache = $self->get_object_cache();
   my $id = $object->object_id();
@@ -853,8 +884,8 @@ sub dump_object {
       return if exists $seen_ref->{$id};
       $seen_ref->{$id} = 1;
     }
-    $story->newline();
-    $story->write_text((" " x $indent) .
+    $self->newline();
+    $self->write_text((" " x $indent) .
 		       $$desc . 
 		       " ($id)");
     my $child = $object_cache->get($object->get_child_id());
@@ -878,12 +909,11 @@ sub teleport {
   #  cheat command: move the player to a new location
   #
   my ($self, $where) = @_;
-  my $story = $self->story();
-  my $player_object = $story->player_object();
+  my $player_object = Games::Rezrov::StoryFile::player_object();
   if (!$where) {
-    $story->write_text("Where to?");
+    $self->write_text("Where to?");
   } elsif (!$player_object) {
-    $story->write_text("Sorry, I'm not sure where you are just yet...");
+    $self->write_text("Sorry, I'm not sure where you are just yet...");
   } else {
     my $object_cache = $self->get_object_cache();
     my @hits = $object_cache->find($where, "-room" => 1);
@@ -892,25 +922,23 @@ sub teleport {
       # only one possible destination: proceed
       my $room_id = $hits[0]->[0];
       my $zstat = new Games::Rezrov::ZObjectStatus($room_id,
-						   $story,
 						   $object_cache);
       if ($zstat->is_current_room()) {
 	# destination object is the current room: be rude
-	$story->write_text($self->random_message(TELEPORT_HERE_MESSAGES));
+	$self->write_text($self->random_message(TELEPORT_HERE_MESSAGES));
       } else {
 	# "teleport" to the new room
-	$story->insert_obj($player_object, $room_id);
+	$self->move_object($player_object, $room_id);
 	# make the player object a child of the new room object
-	$story->write_text($self->random_message(TELEPORT_MESSAGES));
+	$self->write_text($self->random_message(TELEPORT_MESSAGES));
 	# print an appropriate message
-	$story->push_command("look");
+	$self->steal_turn("look");
 	# steal player's next turn to describe new location
       }
     } elsif (@item_hits == 1 and @hits == 0) {
       # user has specified an item instead of a room; try to teleport
       # to the room the item is in
       my $zstat = new Games::Rezrov::ZObjectStatus($item_hits[0]->[0],
-						   $story,
 						   $object_cache);
       
       if ($zstat->parent_room()) {
@@ -918,44 +946,44 @@ sub teleport {
 	my $proceed = 1;
 	if ($zstat->is_current_room()) {
 	  # destination is the current room: be rude
-	  $story->write_text($self->random_message(TELEPORT_HERE_MESSAGES));
+	  $self->write_text($self->random_message(TELEPORT_HERE_MESSAGES));
 	  $proceed = 0;
 	} elsif ($zstat->is_player()) {
-	  $story->write_text("Sure, just tell me where.");
+	  $self->write_text("Sure, just tell me where.");
 	  $proceed = 0;
 	} elsif ($zstat->is_toplevel_child()) {
 	  # top-level, should be visible in new location
-	  $story->write_text($self->random_message(TELEPORT_TO_ITEM_MESSAGES));
+	  $self->write_text($self->random_message(TELEPORT_TO_ITEM_MESSAGES));
 	} else {
 	  # item is probably inside something else visible in the room
 	  my $desc = $zstat->toplevel_child()->print();
-	  $story->write_text(sprintf "I think it's around here somewhere; try the %s.", $$desc);
+	  $self->write_text(sprintf "I think it's around here somewhere; try the %s.", $$desc);
 	  # print description of item's toplevel container
 	}
 	if ($proceed) {
 	  # move the player to the room and steal turn to look around
-	  $story->insert_obj($player_object,
+	  $self->move_object($player_object,
 			     $zstat->parent_room()->object_id());
-	  $story->push_command("look");
+	  $self->steal_turn("look");
 	}
       } else {
 	# can't determine parent (many objects are in limbo until 
 	# something happens)
 	my $random = $object_cache->get_random("-room" => 1);
-	$story->write_text(sprintf "I don't where that is; how about the %s?", $$random);
+	$self->write_text(sprintf "I don't where that is; how about the %s?", $$random);
       }
     } elsif (@hits > 1) {
       # ambiguous destination
-      $story->write_text(sprintf 'Hmm, where you mean: %s?',
+      $self->write_text(sprintf 'Hmm, where you mean: %s?',
 			 nice_list(sort map {$_->[1]} @hits));
     } elsif (@item_hits > 1) {
       # ambiguous item
-      $story->write_text(sprintf 'Hmm, which do you mean: %s?',
+      $self->write_text(sprintf 'Hmm, which do you mean: %s?',
 			 nice_list(sort map {$_->[1]} @item_hits));
     } else {
       # no clue at all
       my $random = $object_cache->get_random("-room" => 1);
-      $story->write_text(sprintf "I don't where that is; how about the %s?", $$random);
+      $self->write_text(sprintf "I don't where that is; how about the %s?", $$random);
     }
   }
 }
@@ -968,7 +996,6 @@ sub frotz {
   # Light is usually provided by a particular object attribute,
   # which varies by game...
   my ($self, $what) = @_;
-  my $story = $self->story();
 
   my @SUPPORTED_GAMES = (
 			 [ ZORK_1, 20 ],
@@ -978,6 +1005,7 @@ sub frotz {
 			 # In Infidel, attribute 21 provides light,
 			 # attribute 10 seems to show "lit and burning" in
 			 # inventory
+			 [ ZTUU, 9 ],
 			);
 
   my @attributes = $self->support_check(@SUPPORTED_GAMES);
@@ -985,7 +1013,7 @@ sub frotz {
 #  die join ",", @attributes;
   
   unless ($what) {
-    $story->write_text("Light up what?");
+    $self->write_text("Light up what?");
   } else {
     # know how to do it
     my $object_cache = $self->get_object_cache();
@@ -995,11 +1023,10 @@ sub frotz {
       my $id = $hits[0]->[0];
       my $zo = $object_cache->get($id);
       my $zstat = new Games::Rezrov::ZObjectStatus($id,
-						   $story,
 						   $object_cache);
       my $proceed = 0;
       if ($zstat->is_player()) {
-	$story->write_text($self->random_message(FROTZ_SELF_MESSAGES));
+	$self->write_text($self->random_message(FROTZ_SELF_MESSAGES));
       } elsif ($zstat->in_inventory()) {
 	$proceed = 1;
       } elsif ($zstat->in_current_room()) {
@@ -1009,27 +1036,27 @@ sub frotz {
 	  $proceed = 1;
 	} else {
 	  # things inside other things might not be visible; be coy
-	  $story->write_text(sprintf "Why don't you pick it up first.");
+	  $self->write_text(sprintf "Why don't you pick it up first.");
 	}
       } else {
-	$story->write_text(sprintf "I don't see any %s here!", $what);
+	$self->write_text(sprintf "I don't see any %s here!", $what);
       }
 
       if ($proceed) {
 	# with apologies to "Enchanter"  :)
 	my $desc = $zo->print();
-	$story->write_text(sprintf "There is an almost blinding flash of light as the %s begins to glow! It slowly fades to a less painful level, but the %s is now quite usable as a light source.", $$desc, $$desc);
+	$self->write_text(sprintf "There is an almost blinding flash of light as the %s begins to glow! It slowly fades to a less painful level, but the %s is now quite usable as a light source.", $$desc, $$desc);
 	foreach (@attributes) {
 	  $zo->set_attr($_);
 	}
       }
     } elsif (@hits > 1) {
       # too many 
-      $story->write_text(sprintf 'Hmm, which do you mean: %s?',
+      $self->write_text(sprintf 'Hmm, which do you mean: %s?',
 			 nice_list(sort map {$_->[1]} @hits));
     } else {
       # no matches
-      $story->write_text("What's that?");
+      $self->write_text("What's that?");
     }
   }
 }
@@ -1043,7 +1070,6 @@ sub travis {
   # You lookin' at me?
   #
   my ($self, $what) = @_;
-  my $story = $self->story();
   my @SUPPORTED_GAMES = (
 			 [ ZORK_1, 29 ],
 		       );
@@ -1051,34 +1077,33 @@ sub travis {
   my $property = $self->support_check(@SUPPORTED_GAMES) || return;
 
   unless ($what) {
-    $story->write_text("What do you want to use as a weapon?");
+    $self->write_text("What do you want to use as a weapon?");
   } else {
     my $object_cache = $self->get_object_cache();
     my @hits = $object_cache->find($what);
     if (@hits == 1) {
       my $zo = $object_cache->get($hits[0]->[0]);
       my $zstat = new Games::Rezrov::ZObjectStatus($hits[0]->[0],
-						   $story,
 						   $object_cache);
       if ($zstat->is_player()) {
-	$story->write_text("You're scary enough already.");
+	$self->write_text("You're scary enough already.");
       } elsif ($zstat->in_inventory()) {
 	if ($zo->test_attr($property)) {
-	  $story->write_text(sprintf "The %s already looks pretty menacing.", ${$zo->print});
+	  $self->write_text(sprintf "The %s looks pretty menacing already.", ${$zo->print});
 	} else {
 	  $zo->set_attr($property);
-	  $story->write_text(sprintf $self->random_message(TRAVIS_MESSAGES), ${$zo->print});
+	  $self->write_text(sprintf $self->random_message(TRAVIS_MESSAGES), ${$zo->print});
 	}
       } elsif ($zstat->in_current_room()) {
-	$story->write_text("Pick it up, then we'll talk.");
+	$self->write_text("Pick it up, then we'll talk.");
       } else {
-	$story->write_text(sprintf "I don't see any %s here!", ${$zo->print});	
+	$self->write_text(sprintf "I don't see any %s here!", ${$zo->print});	
       }
     } elsif (@hits > 1) {
-      $story->write_text(sprintf 'Hmm, which do you mean: %s?',
+      $self->write_text(sprintf 'Hmm, which do you mean: %s?',
 			 nice_list(sort map {$_->[1]} @hits));
     } else {
-      $story->write_text("What's that?");
+      $self->write_text("What's that?");
     }
   }
 }
@@ -1086,31 +1111,39 @@ sub travis {
 sub support_check {
   # check if this game matches one of a given a list of game versions
   my ($self, @list) = @_;
-  my $story = $self->story();
   foreach (@list) {
     my ($name, $rnum, $serial, $checksum, @stuff) = @{$_};
-    if ($story->is_this_game($rnum, $serial, $checksum)) {
+    if (Games::Rezrov::StoryFile::is_this_game($rnum, $serial, $checksum)) {
       # yay
       return @stuff == 1 ? $stuff[0] : @stuff;
     }
   }
   # failed, complain:
-  $story->write_text("Sorry, this trick only currently works in the following games:");
+  $self->write_text("Sorry, this trick only currently works in the following games:");
   foreach (@list) {
-    $story->newline();
-    $story->write_text(sprintf "  - %s (release %d, serial number %s)", @{$_});
+    $self->newline();
+    $self->write_text(sprintf "  - %s (release %d, serial number %s, checksum %s)", @{$_});
+  }
+
+  if (my $title = Games::Rezrov::StoryFile::game_title()) {
+    my $header = Games::Rezrov::StoryFile::header();
+    $self->newline();
+    $self->newline();
+    $self->write_text("You appear to be playing \"$title\", ");
+    $self->write_text(sprintf "release %s, ", $header->release_number());
+    $self->write_text(sprintf "serial number %s, ", $header->serial_code());
+    $self->write_text(sprintf "with checksum %s.", $header->file_checksum());
   }
   
-  return undef;
+  return ();
 }
 
 sub tail {
   # cheat command --
   # follow an object as it moves around; usually a "person"
   my ($self, $what) = @_;
-  my $story = $self->story();
   unless ($what) {
-    $story->write_text("Who or what do you want to tail?");
+    $self->write_text("Who or what do you want to tail?");
   } else {
     my $object_cache = $self->get_object_cache();
     my @hits = $object_cache->find($what);
@@ -1120,37 +1153,35 @@ sub tail {
       my $zo = $object_cache->get($id);
       my $target_desc = $zo->print();
       my $zstat = new Games::Rezrov::ZObjectStatus($id,
-						   $story,
 						   $object_cache);
       if (my $parent = $zstat->parent_room()) {
-	$story->tailing($id);
+	Games::Rezrov::StoryFile::tail($id);
 	my $zs2 = new Games::Rezrov::ZObjectStatus($parent->object_id(),
-						   $story,
 						   $object_cache);
 	if ($zs2->in_current_room()) {
 	  # in same room already
-	  $story->write_text(sprintf "OK.");
+	  $self->write_text(sprintf "OK.");
 	} else {
 	  # our subject is elsewhere: go there
 	  my $desc = ${$parent->print()};
       	  if ($$target_desc =~ /^mr?s\. /i) {
-   	    $story->write_text(sprintf "All right; she's in the %s.", $desc);
+   	    $self->write_text(sprintf "All right; she's in the %s.", $desc);
 	  } elsif ($$target_desc =~ /^mr\. /i) {
-   	    $story->write_text(sprintf "All right; he's in the %s.", $desc);
+   	    $self->write_text(sprintf "All right; he's in the %s.", $desc);
 	  } else {
-	    $story->write_text(sprintf "All right; heading to %s.", $desc);
+	    $self->write_text(sprintf "All right; heading to %s.", $desc);
 	  }
-          $story->newline();
+          $self->newline();
    	  $self->teleport($desc);
         }
       } else {
-	$story->write_text(sprintf "I don't know where %s is...", ${$zo->print});
+	$self->write_text(sprintf "I don't know where %s is...", ${$zo->print});
       }
     } elsif (@hits > 1) {
-      $story->write_text(sprintf 'Hmm, which one: %s?',
+      $self->write_text(sprintf 'Hmm, which one: %s?',
 			 nice_list(sort map {$_->[1]} @hits));
     } else {
-      $story->write_text("Who or what is that?");
+      $self->write_text("Who or what is that?");
     }
   }
 
@@ -1159,12 +1190,11 @@ sub tail {
 sub help {
   # when user types "help" and the game doesn't understand
   my $self = shift;
-  my $story = $self->story();
 
   my @stuff = gethostbyname("www.netscape.com");
   if (@stuff) {
     my $url;
-    my $fvo = $story->full_version_output() || "";
+    my $fvo = Games::Rezrov::StoryFile::full_version_output() || "";
     if ($fvo =~ /infocom/i) {
       # we're playing an infocom game
       $url = $self->random_message(HELP_INFOCOM_URLS);
@@ -1172,14 +1202,14 @@ sub help {
       # title disabled or not infocom
       $url = $self->random_message(HELP_GENERIC_URLS);
     }
-    $story->write_text("I'll try...");
+    $self->write_text("I'll try...");
     call_web_browser($url);
   } else {
-    $story->write_text("Connect to the Internet, then maybe I'll help you.");
+    $self->write_text("Connect to the Internet, then maybe I'll help you.");
   }
-  $story->newline();
-  $story->newline();
-  $story->suppress_hack();
+  $self->newline();
+  $self->newline();
+  $self->suppress_output();
 }
 
 
@@ -1199,6 +1229,361 @@ sub call_web_browser {
       system $command;
     }
   }
+}
+
+sub set_attr {
+  #
+  # cheat command: turn an object attribute on or off
+  #
+  my ($self, $what) = @_;
+#  $what =~ s/^\s+//;
+#  $what =~ s/\s+$//;
+  my @stuff = split /\s+/, $what;
+  if (@stuff == 3) {
+    my ($oid, $pid, $state) = @stuff;
+    if ($state) {
+      Games::Rezrov::StoryFile::set_attr($oid, $pid);
+    } else {
+      Games::Rezrov::StoryFile::clear_attr($oid, $pid);
+    }
+    $self->write_text("Duly tweaked.");
+  } else {
+    $self->write_text("Specify object ID, property ID, state");
+  }
+}
+
+sub decode_text_at {
+  # attempt to decode text at a given address; hack, not a real command
+  my ($self, $what) = @_;
+  return unless $what;
+  my $zt = Games::Rezrov::StoryFile::ztext();
+  Games::Rezrov::StoryFile::write_zchunk($zt->decode_text($what));
+}
+
+sub decode_all_text {
+  # hack, try to find and decode all text in the game.
+  my ($self, $start, $sl, $min_words) = @_;
+  my $zt = Games::Rezrov::StoryFile::ztext();
+  my $header = Games::Rezrov::StoryFile::header();
+  my $flen = $header->file_length();
+  $start = $header->static_memory_address() unless $start;
+  $min_words = 3 unless $min_words;
+#  die $start;
+#  $start = 78463;
+
+  my $SHOW_LEVEL = $sl || 4;
+  # 1. unconditionally show text decoded from each possible address
+  # 2. skip text ending at locations we've previously decoded as not bad
+  # 3. don't show what we think is bad text
+  # 4. only show text we're highly confident of
+
+  my @last_after;
+
+ ADDRESS:
+  for (my $i=$start; $i < $flen; $i++) {
+    my ($blob, $after) = $zt->decode_text($i);
+
+    unless ($SHOW_LEVEL <= 1) {
+      # if this blob's decoded end address matches one of the
+      # end addresses of "okay" chunks we've seen recently,
+      # skip it.
+      foreach (@last_after) {
+	next ADDRESS if $_ == $after;
+      }
+    }
+
+    my $definitely_ok = 0;
+    my $bad = 0;
+    
+    my @words;
+    if (1) {
+      if ($$blob =~ /\s{2,}/) {
+	# sequential whitespace
+	$bad = "too much whitespace" unless $$blob =~ /(\*{3,}|\x0d|\d\.\s+[A-Z])/;
+	# except:
+	# - asterisks
+	# - 80840: You have two choices: 1. Leave  2. Become dinner.
+      }
+
+      $bad = "leading junk I" if $$blob =~ /^\s*[a-z\d\'\-]+[A-Z]\w/;
+      # leading junk before a sentence starts.
+      # planetfall:
+      #  29023: [ok: 4] mxnYou're already in it!
+      #  42037: [ok: 5] 'vnhnYou're already in the booth!
+      #  59517: [definitely ok: 17] -uhnThe door is locked. You probably have to turn the dial to some number to open it.
+      #
+      # z1:
+      #  31560: [definitely ok: 12] qduvQlhmIt's a well known fact that only schizophrenics say "Hello" to a
+
+      $bad = "leading junk II" if $$blob =~ /^\s*[A-Z\d]\w*[a-z]+[A-Z]/;
+      # z1:
+      #  28386: [definitely ok: 13] HmZORK I: The Great Underground Empire
+      #  34419: [ok: 3] 5mHow singularly useless.
+      #
+      # pf:
+      #  29021: [definitely ok: 4] AsmxnYou're already in it!
+      #  41486: CHnThe elevator door closes just as the monsters reach it! You slump back against the wall, exhausted from the chase. The elevator begins to move downward.
+
+      $bad = "leading junk III" if $$blob =~ /^[a-z]+ [A-Z]/;
+      # pf:
+      # 26811: [ok: 10] edavkkthm Floyd giggles. "You look funny without any clothes on."
+
+      # but make sure:
+      # 106966: [definitely ok: 43] "Memoo tuu awl lab pursunel: Duu tuu xe daanjuris naatshur uv xe biioo eksperiments, an eemurjensee sistum haz bin instawld. Xis sistum wud flud xe entiir Biioo Lab wic aa dedlee fungasiid. Propur preecawshunz shud bee taakin if xis sistum iz evur yuuzd."
+
+
+
+      if ($$blob =~ /(?<!\.\.)([,.][A-z])/) {
+	# ok: "Mmm...that tasted just like" [planetfall]
+	if ($$blob =~ /([\w\d]\.){2,}/) {
+	  # numeric sections or acronyms:
+	  # "Pouring or spilling non-liquids is specifically forbidden by section 17.9.2 of the Galactic Adventure Game Compendium of Rules."
+	  # S.P.S. Flathead
+	  1;
+	} else {
+	  $bad = "bad comma/period position: $1";
+	}
+	# ok: 
+      }
+	  
+#      $bad = "bad period/sentence" if $$blob =~ /(?<!\.\.)\.\s+[a-z]/;
+      # sentences must start capitalized; alas this breaks Zork I's
+      # matchbox text (..."Mr. Anderson of Muddle, Mass. says:"...)
+      foreach ($$blob =~ /(\w+)\.\s+[a-z]/g) {
+	# look for suspicious periods, eg:
+	# 43719: [ok: 20] vqu candles voa. and, being for the moment sated, throws it back. Fortunately, the troll has poor control, and the
+	next if /[A-Z][a-z]+/;
+	# but allow in proper abbreviations:
+	# Mr. Anderson of Muddle, Mass. says: "Before I took this course I was a lowly bit twiddler. Now with what I learned at GUE Tech I feel really important and can obfuscate and confuse with the best."
+	$bad = "suspicious period";
+      }
+
+      $bad = "space before period" if $$blob =~ /\s\.(?!\.\.)/;
+      # ellipsis ok
+
+      $bad = "bad comma" if $$blob =~ /\s,/;
+
+#      $bad = "bad quote: $1" if $$blob =~ /(\s\')/;
+      # OK: 
+      #  - \n'Til one brave advent'rous spirit
+      #  - 80588: The cyclops, tired of all of your games and trickery, grabs you firmly. As he licks his chops, he says "Mmm. Just like Mom used to make 'em." It's nice to be appreciated.
+
+      $bad = "bad punctuation" if $$blob =~ /[\!\?]\w/;
+      
+#      $bad = "multi punctuation" if $$blob =~ /[\'\.\,\;\:\?]{2,}/;
+
+      # problematic?:
+#      $bad = 1 if $$blob =~ /[bcdfghjklmnpqrstvwxyz]{5,}/i;
+      # if too many consonants in a row.
+      # 4 not enough: "filthy"
+
+      # odd capitalization (problematic):
+      $bad = "weird capitalization I" if $$blob =~ /[a-z][A-Z]\s+/;
+      $bad = "weird capitalization II" if $$blob =~ /\s[a-z]+[A-Z]/;
+      # ok: InvisiClues
+      
+      $$blob =~ s/^\s+//;
+      $$blob =~ s/\s+$//;
+      # ignore leading/trailing whitespace
+#      my @words = split /\s+/, $$blob;
+      @words = split /\s+/, $$blob;
+
+      unless (@words >= $min_words) {
+	$bad = sprintf "only %d words", scalar @words
+	  unless $$blob =~ /.+[\!\?\.\:]$/;
+	# forgive low word counts for exclamations, etc
+      }
+
+      foreach (@words) {
+	next unless length $_;
+	# leading/trailing whitespace, or spaces around "..."
+	# planetfall:
+	#
+	# Wow!!! Under the table are three keys, a sack of food, a reactor elevator access pass, one hundred gold pieces ... Just kidding. Actually, there's nothing there.
+
+	next if $_ eq "...";
+
+	next if /^[A-Z][a-z]+\.$/;
+	# title; Mrs./Dr. etc
+
+	next if /^[A-Z]\.$/;
+	# initial: S. Eric Meretzky
+	
+	next if /^\(c\)$/i;
+	# copyright
+
+	s/\W+$//;
+	s/^\W+//;
+	# strip puntuncation, etc from end of sentences
+	# catch cases like this -- ("n"), planetfall 29855
+	# This n. You'll have to eat it right from the survival kit.
+	# 80588: [no vowel: "Mmm] The cyclops, tired of all of your games and trickery, grabs you firmly. As he licks his chops, he says "Mmm. Just like Mom used to make 'em." It's nice to be appreciated.
+
+	next unless $_;
+	# might be leading punctuation:
+	# 26127: [no vowel: ] , but both of these are blocked by closed bulkheads.
+	next if /-/ and /^[\w-]+$/;
+	# 67812: [no vowel: B-19-7] Suddenly, the robot comes to life and its head starts swivelling about. It notices you and bounds over. "Hi! I'm B-19-7, but to everyperson I'm called Floyd. Are you a doctor-person or a planner-person?
+	
+	next if /^\#?[\d,]+$/;
+	# a number
+	# 44128: There are 69,105 leaves here.
+	# FIX ME: floating point/money/etc
+	# 47374: [no vowel: #3] You are standing on the top of the Flood Control Dam #3, which was quite a tourist attraction in times far distant. There are paths to the north, south, and west, and a scramble down.
+
+
+	unless (/[aeiouy]/i) {
+	  # require words to contain at least one vowel...
+	  # "y" allowed; eg "by"
+	  $bad = "no vowel: $_" unless /[\.\#]/
+	    or /^h?m{2,}$/i
+	      or /^\d+(rd|st|nd|th)$/
+		or /^\d+\/\d+/;
+	  # except:
+	  #  - 21st, 22nd, 23rd, 24th...
+	  # 88472: [no vowel: 22nd] Grues are vicious, carnivorous beasts first introduced to Earth by a visiting alien spaceship during the late 22nd century. Grues spread throughout the galaxy alongside man. Although now extinct on all civilized planets, they still exist in some backwater corners of the galaxy. Their favorite diet is Ensigns Seventh Class, but their insatiable appetite is tempered by their fear of light.
+	  #  - fractions (1/4)
+	  #  - acronyms (eg. "S.P.S. Flathead")
+	  #  - FDC#3
+	  #  - Mmmm...
+	  #  - Hmm
+	  # but not:
+	  # 37729: [no vowel: hm] hm You are also incredibly famished. Better get some breakfast!
+	  #
+	  #  - 
+	}
+	$bad = "embedded quotes: $_" if /\w+\"\w+/;
+	# embedded quotes no good
+
+	$bad = "too much mixed-case" if /([A-Z][a-z]+){3,}/;
+	
+	$bad = "unlikely word: $_" if /[A-z]\d[A-z]/;
+	
+	if (length $_ == 1) {
+	  $bad = "bogus 1-char word: $_" unless /^[aio]$/i;
+	  # few very 1-letter words legal
+	  # "O, they ruled the solar system"
+	} elsif (length($_) > 24) {
+	  # ok: Br'gun-te'elkner-ipg'nun
+	  # [planetfall]
+	  $bad = "too long: $_";
+	} else {
+
+	  if (/^[aeiou]+$/i) {
+	    $bad = "all vowels: $_" unless ($_ eq 'aa') or /^[MCLXVI]+$/;
+	    # bad if all vowels:
+	    #  - don't count y; "you" is ok
+	    #  - roman numerals OK: 69098: [all vowels: II] The solid-gold coffin used for the burial of Ramses II is here.
+	    # 
+	    # however, planetfall at 106966:
+	    # "Memoo tuu awl lab pursunel: Duu tuu xe daanjuris naatshur uv xe biioo eksperiments, an eemurjensee sistum haz bin instawld. Xis sistum wud flud xe entiir Biioo Lab wic aa dedlee fungasiid. Propur preecawshunz shud bee taakin if xis sistum iz evur yuuzd."
+	  }
+	  
+	}
+	
+	$bad = "all consonants: $_" if $$blob =~ /^[bcdfghjklmnpqrstvwxyz]+$/i;
+	# bad if all consonants
+      }
+      #	die "\"$_\" bad " . length($_) if $bad;
+      1;
+    }
+  
+    unless ($bad) {
+      my @hits = ($$blob =~ /\.\s*\w/g);
+      if (@hits) {
+	# if the blob contains periods that are positioned in a way
+	# that seems to make sense, consider the blob confirmed
+	my $p_all_ok = 1;
+	foreach (@hits) {
+	  unless (/\.\s+[A-Z]/) {
+	    $p_all_ok = 0;
+	  }
+	}
+	$definitely_ok = 1 if $p_all_ok;
+	#      printf STDERR "  comma check: %s, $bad $c_all_ok\n", $$blob;
+      }
+      
+      $definitely_ok = 1 if $$blob =~ /\".*\"/;
+      # embedded quoted string
+
+      $definitely_ok = 1 if $$blob =~ /^[A-Z].+\.$/;
+
+#      $definitely_ok = 1 if $$blob =~ /^[A-Z][A-z\d\s\'\-\.\!\,\;\:\(\)\?\*]+?\w[\!\?\.\:\"]{1,3}$/;
+      $definitely_ok = 1 if $$blob =~ /^[A-Z].*[\!\?\.\:\"]{1,3}$/;
+      # looks like one or more complete sentences.
+      # allow ending with "..."
+      # 44018: [ok: 6] I don't know the word "
+    }
+
+#    $definitely_ok = 0;
+
+    unless ($bad) {
+      push @last_after, $after;
+      shift @last_after if @last_after > 5;
+    }
+
+    if ($bad ? $SHOW_LEVEL < 3 : $SHOW_LEVEL == 4 ? $definitely_ok : 1) {
+      $$blob =~ s/\x0d/\x0a/g;
+      if (0) {
+	# testing
+	my $tag;
+	if ($bad) {
+	  $tag = "[$bad] ";
+	} elsif ($SHOW_LEVEL == 4) {
+	  $tag = "";
+	} else {
+	  $tag = sprintf "[%sok: %d] ",
+	  ($definitely_ok ? "definitely " : ""),
+	  scalar @words;
+	}
+	printf STDERR "%d: %s%s\n", $i, $tag, $$blob;
+      } else {
+	# for user
+	$self->write_text(sprintf "%d: %s", $i, $$blob);
+	$self->newline();
+      }
+    }
+  
+    if ($definitely_ok) {
+      # if we're *really* sure about the blob, continue our decoding
+      # after it's done (so we don't see redundant partially-decoded
+      # bits).
+      $i = $after - 1;
+    }
+  }
+}
+
+sub notify_toggle {
+  # "notify" emulation: user is toggling state.
+  my ($self) = @_;
+  my $now = Games::Rezrov::ZOptions::notifying();
+  my $status = $now ? 0 : 1;
+  $self->write_text(sprintf "Score notification is now %s.", $status ? "on" : "off");
+  $self->newline();
+  $self->newline();
+  $self->suppress_output();
+  Games::Rezrov::ZOptions::notifying($status);
+}
+
+sub move_object {
+  Games::Rezrov::StoryFile::insert_obj($_[1], $_[2]);
+  # hee hee
+}
+
+sub steal_turn {
+  Games::Rezrov::StoryFile::push_command($_[1]);
+}
+
+sub newline {
+  Games::Rezrov::StoryFile::newline();
+}
+
+sub write_text {
+  Games::Rezrov::StoryFile::write_text($_[1]);
+}
+
+sub suppress_output {
+  Games::Rezrov::StoryFile::suppress_hack();
 }
 
 1;

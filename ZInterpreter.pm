@@ -37,18 +37,25 @@ $TYPE_LABELS[OP_EXT] = "EXT";
 # "obfuscated opcode" approach that zip 2.0 uses...
 #
 
+my (@ext_ops, @generic_opcodes, @manual_descs);
+
 my @zero_ops;
 $zero_ops[0x00] = 'rtrue';
 $zero_ops[0x01] = 'rfalse';
 $zero_ops[0x02] = 'print_text';
 $zero_ops[0x03] = 'print_ret';
+$zero_ops[0x04] = 'nop';
 $zero_ops[0x05] = 'save';
 $zero_ops[0x06] = 'restore';
+# 0x07 handled manually (restart)
 $zero_ops[0x08] = 'ret_popped';
 $zero_ops[0x09] = 'stack_pop';
+# 0x0a handled manually (quit)
 $zero_ops[0x0b] = 'newline';
 $zero_ops[0x0c] = 'display_status_line';
 $zero_ops[0x0d] = 'verify';
+# 0x0e = first byte of extended opcode
+$zero_ops[0x0f] = 'piracy';
 
 my @one_ops;
 $one_ops[0x00] = 'compare_jz';
@@ -59,11 +66,15 @@ $one_ops[0x04] = 'get_property_length';
 $one_ops[0x05] = 'increment';
 $one_ops[0x06] = 'decrement';
 $one_ops[0x07] = 'print_addr';
+$one_ops[0x08] = 'call_func';
 $one_ops[0x09] = 'remove_object';
 $one_ops[0x0a] = 'print_object';
+# 0x0b handled manually; ret(), possibly async
+$manual_descs[OP_1OP]->[0x0b] = 'ret';
 $one_ops[0x0c] = 'jump';
 $one_ops[0x0d] = 'print_paddr';
 $one_ops[0x0e] = 'load_variable';
+$one_ops[0x0f] = 'not_or_possibly_call';
 
 my @two_ops;
 $two_ops[0x01] = 'compare_je';
@@ -90,32 +101,47 @@ $two_ops[0x15] = 'subtract';
 $two_ops[0x16] = 'multiply';
 $two_ops[0x17] = 'divide';
 $two_ops[0x18] = 'mod';
+$two_ops[0x19] = 'call_func';
+$two_ops[0x1a] = 'call_proc';
 $two_ops[0x1b] = 'set_color';
+$two_ops[0x1c] = 'throw';
 
 my @var_ops;
+$var_ops[0x00] = 'call_func';
 $var_ops[0x01] = 'store_word';
 $var_ops[0x02] = 'store_byte';
 $var_ops[0x03] = 'put_property';
+# 0x04 handled manually (read_line)
+$manual_descs[OP_VAR]->[0x04] = 'read_line';
 $var_ops[0x05] = 'write_zchar';
 $var_ops[0x06] = 'print_num';
 $var_ops[0x07] = 'random';
 $var_ops[0x08] = 'routine_push';
-$var_ops[0x09] = 'routine_pop';
+$var_ops[0x09] = 'pull';
 $var_ops[0x0a] = 'split_window';
 $var_ops[0x0b] = 'set_window';
+$var_ops[CALL_VS2] = 'call_func';  # 0x0c
 $var_ops[0x0d] = 'erase_window';
+$var_ops[0x0e] = 'erase_line';
 $var_ops[0x0f] = 'set_cursor';
+$var_ops[0x10] = 'get_cursor';
 $var_ops[0x11] = 'set_text_style';
 $var_ops[0x12] = 'set_buffering';
 $var_ops[0x13] = 'output_stream';
 $var_ops[0x14] = 'input_stream';  # example: minizork.z3, "#comm"
 $var_ops[0x15] = 'play_sound_effect';
+# 0x16 handled manually (read_char)
+$manual_descs[OP_VAR]->[0x16] = 'read_char';
+$var_ops[0x17] = 'scan_table';
+$var_ops[0x18] = 'z_not';
+$var_ops[0x19] = 'call_proc';
+$var_ops[CALL_VN2] = 'call_proc';  # 0x1a
 $var_ops[0x1b] = 'tokenize';
+$var_ops[0x1c] = 'encode_text';
 $var_ops[0x1d] = 'copy_table';
 $var_ops[0x1e] = 'print_table';
 $var_ops[0x1f] = 'check_arg_count';
 
-my @ext_ops;
 $ext_ops[0x00] = 'save';
 $ext_ops[0x01] = 'restore';
 $ext_ops[0x02] = 'log_shift';
@@ -123,7 +149,6 @@ $ext_ops[0x04] = 'set_font';
 $ext_ops[0x09] = 'save_undo';
 $ext_ops[0x0a] = 'restore_undo';
 
-my @generic_opcodes;
 $generic_opcodes[OP_0OP] = \@zero_ops;
 $generic_opcodes[OP_1OP] = \@one_ops;
 $generic_opcodes[OP_2OP] = \@two_ops;
@@ -139,23 +164,22 @@ sub interpret {
   # >
   #
   my $self = shift;
-  my $quit = 0;
-  my $story = $self->story();
   my $zio = $self->zio();
-  my $z_version = $story->version();
+  my $z_version = Games::Rezrov::StoryFile::version();
   my ($start_pc, $opcode, $opcode_count);
   my ($op_style, $operand_types, $optype, $i);
   my @operands;
   my @op_counts;
   my $oc;
+  my $where;
   my $input_counts = 0;
   my $count_opcodes = Games::Rezrov::ZOptions::COUNT_OPCODES();
   my $write_opcodes = Games::Rezrov::ZOptions::WRITE_OPCODES();
 
   my $var_ops = 0;
   my $orig_opcode;
-  while (! $quit) {
-    $start_pc = $Games::Rezrov::PC;
+  while (1) {
+    $start_pc = $Games::Rezrov::StoryFile::PC;
     # for "undo" emulation: the PC before any processing has occurred
     $orig_opcode = $opcode = GET_BYTE();
     $op_style = OP_UNKNOWN;
@@ -173,9 +197,9 @@ sub interpret {
 #		   $story->load_operand(($opcode & 0x20) == 0 ? 1 : 2));
       
       @operands = (($opcode & 0x40) == 0 ?
-		   GET_BYTE() : $story->get_variable(GET_BYTE()),
+		   GET_BYTE() : Games::Rezrov::StoryFile::get_variable(GET_BYTE()),
 		   ($opcode & 0x20) == 0 ?
-		   GET_BYTE() : $story->get_variable(GET_BYTE()));
+		   GET_BYTE() : Games::Rezrov::StoryFile::get_variable(GET_BYTE()));
       $opcode &= 0x1f; # last 5 bits
       $op_style = OP_2OP;
     } elsif ($opcode & 0x40) {
@@ -215,7 +239,7 @@ sub interpret {
 	$optype = ($opcode & 0x30) >> 4;
 	# 4.2:
 	if ($optype == 2) {
-	  push @operands, $story->get_variable(GET_BYTE());
+	  push @operands, Games::Rezrov::StoryFile::get_variable(GET_BYTE());
 	} elsif ($optype == 1) {
 	  push @operands, GET_BYTE();
 	} elsif ($optype == 0) {
@@ -243,12 +267,14 @@ sub interpret {
       }
 #      printf STDERR "%s: ", $operand_types;
       for (; $i >=0; $i -= 2) {
+	# sadly, it\'s slower to pack() the optypes and extract the
+	# elements with vec($operand_types, $x, 2) than to bit-twiddle.
 	$optype = ($operand_types >> $i) & 0x03;
 #	print STDERR "$optype ";
 #	push @operands, $story->load_operand($optype);
 #	last if $optype == 0x03;
 	if ($optype == 2) {
-	  push @operands, $story->get_variable(GET_BYTE());
+	  push @operands, Games::Rezrov::StoryFile::get_variable(GET_BYTE());
 	} elsif ($optype == 1) {
 	  push @operands, GET_BYTE();
 	} elsif ($optype == 0) {
@@ -279,7 +305,8 @@ sub interpret {
       $opcode,
       $opcode,
       $orig_opcode,
-      ($generic_opcodes[$op_style]->[$opcode] || ""),
+      ($generic_opcodes[$op_style]->[$opcode] ||
+       $manual_descs[$op_style]->[$opcode] || "???"),
       join(",", @operands);
     }
 
@@ -289,7 +316,7 @@ sub interpret {
     #    2OP, 1OP, VAR, 0OP
     #
     $op_counts[$op_style]++;
-    if (defined $generic_opcodes[$op_style]->[$opcode]) {
+    if ($oc = $generic_opcodes[$op_style]->[$opcode]) {
       #
       #  Process opcodes 0/1/2/var/ext (old version):  5.43 secs
       #  Add processing opcodes by likely frequency:   4.51 secs
@@ -297,32 +324,22 @@ sub interpret {
       #
       #  (about 30% faster)
       #
-      $oc = $generic_opcodes[$op_style]->[$opcode];
 #      die unless @operands == $op_style;
-      $story->$oc(@operands);
+#      $story->$oc(@operands);
+      no strict "refs";
+      &{"Games::Rezrov::StoryFile::$oc"}(@operands);
       # @operands contains the correct number of operands; just pass them
     } elsif ($op_style == OP_2OP) {
       #
       #  2-operand opcodes (well, mostly)
       #
-      if ($opcode == 0x19) {
-	$story->call(\@operands, Games::Rezrov::ZFrame::FUNCTION);
-	# v4 only
-      } elsif ($opcode == 0x1a) {
-	$story->call(\@operands, Games::Rezrov::ZFrame::PROCEDURE);
-	# v5 only
-      } else {
-	$self->zi_die($op_style, $opcode, $opcode_count);
-      }
+      $self->zi_die($op_style, $opcode, $opcode_count);
     } elsif ($op_style == OP_1OP) {
       #
       # one operand opcodes
       #
-      if ($opcode == 0x08) {
-	$story->call(\@operands, Games::Rezrov::ZFrame::FUNCTION);
-	# v4 only
-      } elsif ($opcode == 0x0b) {
-	my $result = $story->ret($operands[0]);
+      if ($opcode == 0x0b) {
+	my $result = Games::Rezrov::StoryFile::ret($operands[0]);
 #	if ($story->is_interrupt_top()) {
 #	  # end of interrupt routine
 #	  $story->set_interrupt_top(0);
@@ -331,7 +348,7 @@ sub interpret {
 	# async interpreter call (v4+), not implemented
       } elsif ($opcode == 0x0f) {
 	die("bitwise not, FIX ME") if ($z_version < 5);
-	$story->call(\@operands, Games::Rezrov::ZFrame::PROCEDURE);
+	Games::Rezrov::StoryFile::call(\@operands, Games::Rezrov::StoryFile::FRAME_PROCEDURE);
       } else {
 	$self->zi_die($op_style, $opcode, $opcode_count);
       }
@@ -339,10 +356,8 @@ sub interpret {
       #
       #  variable-format opcodes
       #
-      if ($opcode == 0x00) {
-	$story->call(\@operands, Games::Rezrov::ZFrame::FUNCTION);
-      } elsif ($opcode == 0x04) {
-	$story->read_line(\@operands, $self, $start_pc);
+      if ($opcode == 0x04) {
+	Games::Rezrov::StoryFile::read_line(\@operands, $self, $start_pc);
 	if ($count_opcodes and
 	    (++$input_counts > (Games::Rezrov::ZOptions::GUESS_TITLE() ? 1 : 0))) {
 	  my $count = 0;
@@ -352,34 +367,24 @@ sub interpret {
 	    $count += $oc;
 	    $desc .= sprintf " %s:%d", $TYPE_LABELS[$key], $oc;
 	  }
-	  $story->write_text(sprintf "[%d opcodes:%s]\n", $count, $desc);
+	  Games::Rezrov::StoryFile::write_text(sprintf "[%d opcodes:%s]\n", $count, $desc);
 	  @op_counts = ();
 	}
-      } elsif ($opcode == CALL_VS2) {
-	$story->call(\@operands, Games::Rezrov::ZFrame::FUNCTION);
-	# call_vs2
       } elsif ($opcode == 0x16) {
-	$story->read_char(\@operands, $self);
-      } elsif ($opcode == 0x17) {
-	$story->scan_table(\@operands);
-	# v5+ from here on
-      } elsif ($opcode == 0x19) {
-	$story->call(\@operands, Games::Rezrov::ZFrame::PROCEDURE);
-      } elsif ($opcode == CALL_VN2) {
-	$story->call(\@operands, Games::Rezrov::ZFrame::PROCEDURE);
-      } else {
+	Games::Rezrov::StoryFile::read_char(\@operands, $self);
+       } else {
 	$self->zi_die($op_style, $opcode, $opcode_count);
       }
     } elsif ($op_style == OP_0OP) {
       #
       #  zero-operand opcodes
       #
-      if ($opcode == 0x04) {
-	1; # NOP opcode
-      } elsif ($opcode == 0x07) {
+      if ($opcode == 0x07) {
+	# restart game
 	$self->restart(0);
       } elsif ($opcode == 0x0a) {
-	$quit = 1;
+	# quit
+	last;
       } else {
 	$self->zi_die($op_style, $opcode, $opcode_count);
       }
@@ -395,7 +400,7 @@ sub interpret {
   $zio->newline();
   $zio->get_input(1,1);
 
-  $zio->set_game_title(" ") if $story->game_title();
+  $zio->set_game_title(" ") if Games::Rezrov::StoryFile::game_title();
   $zio->cleanup();
   printf "Opcode counts: %s\n", join " ", @op_counts if $count_opcodes;
 }
@@ -405,12 +410,11 @@ Games::Rezrov::Inliner::inline(\$INLINE_CODE);
 eval $INLINE_CODE;
 
 sub new {
-  my ($type, $story, $zio) = @_;
+  my ($type, $zio) = @_;
   my $self = {};
   bless $self, $type;
 
   $self->zio($zio);
-  $self->story($story);
 
   if (my $where = Games::Rezrov::ZOptions::WRITE_OPCODES()) {
     if ($where eq "STDERR") {
@@ -434,15 +438,10 @@ sub zio {
   return (defined $_[1] ? $_[0]->{"zio"} = $_[1] : $_[0]->{"zio"});
 }
 
-sub story {
-  return (defined $_[1] ? $_[0]->{"story"} = $_[1] : $_[0]->{"story"});
-}
-
 sub restart {
   my ($self, $first_time) = @_;
-  my $story = $self->story();
-  $story->reset_storyfile() unless $first_time;
-  $story->reset_game();
+  Games::Rezrov::StoryFile::reset_storyfile() unless $first_time;
+  Games::Rezrov::StoryFile::reset_game();
 }
 
 sub zi_die {

@@ -45,8 +45,19 @@ if (!$@) {
 DONE
 
 } else {
-  eval 'use POSIX qw(:termios_h)';
-  if (!$@) {
+    my $posix_ok = 0;
+   eval 'use POSIX qw(:termios_h)';
+   if (!$@) { 
+       eval 'my $term = POSIX::Termios->new();';
+       if ($@) {
+         # we have the POSIX module but Termios doesn't work!
+#	 die "aha";
+       } else {
+         $posix_ok = 1;
+       } 
+   } 
+
+   if ($posix_ok) {
     #
     # use POSIX termios
     # 

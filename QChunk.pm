@@ -3,7 +3,7 @@ package Games::Rezrov::QChunk;
 use strict;
 
 use SelfLoader;
-
+#use Carp qw(confess);
 1;
 
 __DATA__
@@ -119,6 +119,7 @@ sub add_byte {
 sub add_word {
   my ($self, $value) = @_;
   my $buf = $_[0]->{"buffer"};
+#  confess unless defined $value;
   $$buf .= pack 'n', $value;
 }
 

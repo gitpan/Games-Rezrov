@@ -9,7 +9,6 @@ Quetzal.pm
 StoryFile.pm
 ZConst.pm
 ZDict.pm
-ZFrame.pm
 ZHeader.pm
 ZIO_Generic.pm
 ZIO_Tools.pm

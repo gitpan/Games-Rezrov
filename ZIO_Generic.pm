@@ -5,6 +5,7 @@ package Games::Rezrov::ZIO_Generic;
 use strict;
 
 use Games::Rezrov::ZIO_Tools;
+use Games::Rezrov::ZConst;
 use Games::Rezrov::MethodMaker qw(
 			   current_window
 
@@ -24,6 +25,11 @@ sub new {
 sub can_split {
   # true or false: can this zio split the screen?
   return 1;
+}
+
+sub groks_font_3 {
+  # true or false: can this zio handle graphical "font 3" z-characters?
+  return 0;
 }
 
 sub fixed_font_default {
@@ -71,7 +77,7 @@ sub buffer_zchunk {
     # this unpack() seems a little faster than a split().
     # Any better way ???
     if ($_ eq $nl) {
-      $_[0]->story()->flush();
+      Games::Rezrov::StoryFile::flush();
       $_[0]->newline();
     } else {
       $buffer .= $_;
@@ -107,7 +113,7 @@ sub DESTROY {
 
 sub fatal_error {
   my ($self, $msg) = @_;
-  $self->write_string("Error: " . $msg);
+  $self->write_string("Fatal error: " . $msg);
   $self->newline();
   $self->get_input(1,1);
   $self->cleanup();

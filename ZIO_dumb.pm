@@ -48,7 +48,7 @@ sub new {
 sub io_setup {
   my ($self, $readline_ok) = @_;
 
-  if (find_module("Term/ReadKey.pm")) {
+  if (find_module('Term::ReadKey')) {
     require Term::ReadKey;
     import Term::ReadKey;
     $have_term_readkey = 1;
@@ -58,7 +58,7 @@ sub io_setup {
     # make sure we don't buffer any (invisible) characters
   }
 
-  if ($readline_ok and find_module("Term/ReadLine.pm")) {
+  if ($readline_ok and find_module('Term::ReadLine')) {
     require Term::ReadLine;
     $have_term_readline = 1;
     $tr = new Term::ReadLine 'what?', \*main::STDIN, \*main::STDOUT;
@@ -103,15 +103,10 @@ sub can_split {
   return 0;
 }
 
-sub story {
-  return (defined $_[1] ? $_[0]->{"story"} = $_[1] : $_[0]->{"story"});
-}
-
 sub set_version {
-  my ($self, $story, $status_needed, $callback) = @_;
-  $self->story($story);
-  $story->rows($rows);
-  $story->columns($columns);
+  my ($self, $status_needed, $callback) = @_;
+  Games::Rezrov::StoryFile::rows($rows);
+  Games::Rezrov::StoryFile::columns($columns);
 #  print STDERR "$columns\n";
   $self->clear_screen();
   return 0;
@@ -141,7 +136,7 @@ sub newline {
   print "\n";
 #  cluck "nl\n";
   $abs_x = 0;
-  $_[0]->story()->register_newline();
+  Games::Rezrov::StoryFile::register_newline();
 }
 
 sub write_zchar {
@@ -168,11 +163,15 @@ sub get_input {
     if ($have_term_readline) {
       # readline insists on resetting the line so we need to give it
       # everything up to the cursor position.
-      $line = $tr->readline($self->story()->prompt_buffer());
+      $line = $tr->readline(Games::Rezrov::StoryFile::prompt_buffer());
       # this doesn't work with v5+ preloaded input
     } else {
       $line = <STDIN>;
       # this doesn't work with v5+ preloaded input
+      unless (defined $line) {
+	$line = "";
+	print "\n";
+      }
     }
     chomp $line;
     $line = "" unless defined($line);
@@ -209,16 +208,15 @@ sub set_window {
     # ignore output except on lower window
     unless ($self->warned()) {
       $self->warned(1);
-      my $story = $self->story();
-      my $pb = $story->prompt_buffer();
+      my $pb = Games::Rezrov::StoryFile::prompt_buffer();
       $self->newline();
-      $story->set_window(Games::Rezrov::ZConst::LOWER_WIN);
+      Games::Rezrov::StoryFile::set_window(Games::Rezrov::ZConst::LOWER_WIN);
       my $message = "WARNING: this game is attempting to use multiple windows, which this implementation can't handle. The game may be unplayable using this interface.  You should probably use the Tk, Curses, Termcap, or Win32 interfaces if you can; see the documentation.";
       $self->SUPER::buffer_zchunk(\$message);
-      $story->flush();
+      Games::Rezrov::StoryFile::flush();
       $self->newline();
-      $story->prompt_buffer($pb) if $pb;
-      $story->set_window($window);
+      Games::Rezrov::StoryFile::prompt_buffer($pb) if $pb;
+      Games::Rezrov::StoryFile::set_window($window);
     }
   }
 }
@@ -244,7 +242,6 @@ sub cleanup {
 
 sub warned {
   return (defined $_[1] ? $_[0]->{"warned"} = $_[1] : $_[0]->{"warned"});
-  die $_[0];
 }
 
 

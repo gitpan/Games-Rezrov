@@ -4,6 +4,7 @@
 package Games::Rezrov::ZHeader;
 
 use Games::Rezrov::ZConst;
+use Games::Rezrov::Inliner;
 
 use strict;
 
@@ -59,6 +60,9 @@ use constant FONT_WIDTH_UNITS_V6 => 0x27;
 use constant FONT_HEIGHT_UNITS_V5 => 0x27;
 use constant FONT_HEIGHT_UNITS_V6 => 0x26;
 
+use constant ROUTINES_OFFSET => 0x28;
+use constant STRINGS_OFFSET => 0x2a;
+
 use Games::Rezrov::MethodMaker ([],
 			 qw(
 			    abbrev_table_address
@@ -83,35 +87,37 @@ use Games::Rezrov::MethodMaker ([],
 			    object_count
 			    encoded_word_length
 			    is_time_game
+			    strings_offset
+			    routines_offset
 			   ));
 
 use SelfLoader;
 
 1;
 
-__DATA__
-
+my $INLINE_CODE = '
 sub new {
-  my ($type, $story, $zio) = @_;
+  my ($type, $zio) = @_;
   my $self = [];
   bless $self, $type;
-  $self->story($story);
   
-  my $version = $story->get_byte_at(0);
-  if ($version < 1 or $version > 10) {
+  my $version = GET_BYTE_AT(0);
+  if ($version < 1 or $version > 8) {
     die "This does not appear to be a valid game file.\n";
-  } elsif ($version < 3 or $version > 5) {
-    die "Sorry, only version 3-5 games are supported at present...\nEven those don't always work right :)\n"
+  } elsif (($version < 3 or $version > 5) and $version != 8) {
+#  } elsif ($version < 3 or $version > 8) {
+#    die "Sorry, only z-code versions 3-8 are supported at present...\nAnd even those need work!  :)\n"
+    die "Sorry, only z-code versions 3,4,5 and 8 are supported at present...\nAnd even those need work!  :)\n"
   } else {
     $self->version($version);
   }
 
-  my $f1 = $story->get_byte_at(FLAGS_1);
+  my $f1 = GET_BYTE_AT(FLAGS_1);
   $self->is_time_game($f1 & 0x02 ? 1 : 0);
   # a "time" game: 8.2.3.2
 
-  my $start_rows = $story->rows();
-  my $start_columns = $story->columns();
+  my $start_rows = Games::Rezrov::StoryFile::rows();
+  my $start_columns = Games::Rezrov::StoryFile::columns();
 
   $f1 |= TANDY if Games::Rezrov::ZOptions::TANDY_BIT();
   # turn on the "tandy bit"
@@ -121,7 +127,7 @@ sub new {
     # 13.3, 13.4
 
     # set bits 4 (status line) and 5 (screen splitting) appropriately
-    # depending on the ZIO implementation's abilities
+    # depending on the ability of the ZIO implementation
     if ($zio->can_split()) {
       # yes
       $f1 |= SCREEN_SPLITTING_AVAILABLE;
@@ -157,9 +163,9 @@ sub new {
       $f1 &= ~0x80;
       # "bit 7" (#8): timed input NOT available
 
-      $story->set_byte_at(30, Games::Rezrov::ZOptions::INTERPRETER_ID());
+      Games::Rezrov::StoryFile::set_byte_at(30, Games::Rezrov::ZOptions::INTERPRETER_ID());
       # interpreter number
-      $story->set_byte_at(31, ord 'R');
+      Games::Rezrov::StoryFile::set_byte_at(31, ord "R");
       # interpreter version; "R" for rezrov
       
       $self->set_columns($start_columns);
@@ -171,15 +177,20 @@ sub new {
 	$f1 |= 0x01;
       }
 
-#      printf "dfc:%s\n", $story->get_byte_at(FOREGROUND_COLOR);
-      $story->set_byte_at(BACKGROUND_COLOR, Games::Rezrov::ZConst::COLOR_BLACK);
-      $story->set_byte_at(FOREGROUND_COLOR, Games::Rezrov::ZConst::COLOR_WHITE);
+      Games::Rezrov::StoryFile::set_byte_at(BACKGROUND_COLOR, Games::Rezrov::ZConst::COLOR_BLACK);
+      Games::Rezrov::StoryFile::set_byte_at(FOREGROUND_COLOR, Games::Rezrov::ZConst::COLOR_WHITE);
       # 8.3.3: default foreground and background
       # FIX ME!
 
-      my $f2 = $story->get_word_at(FLAGS_2);
-      $f2 &= ~ WANTS_PICTURES;
-      # disable font 3 usage...this is a wreck
+      my $f2 = Games::Rezrov::StoryFile::get_word_at(FLAGS_2);
+      if ($zio->groks_font_3() and
+	  !Games::Rezrov::StoryFile::font_3_disabled()) {
+	# ZIO can decode font 3 characters
+	$f2 |= WANTS_PICTURES;
+      } else {
+	# nope
+	$f2 &= ~ WANTS_PICTURES;
+      }
       
 #      $f2 |= WANTS_UNDO;
       $f2 &= ~ WANTS_UNDO;
@@ -189,31 +200,31 @@ sub new {
 	# 8.3.4: the game wants to use colors
 #	print "wants color!\n";
       }
-      $story->set_word_at(FLAGS_2, $f2);
+      Games::Rezrov::StoryFile::set_word_at(FLAGS_2, $f2);
     }
     if ($version >= 6) {
-      # unimplemented
-      # see 8.3.2,etc
-      print STDERR ("zheader: v6+, fix me"); # debug
+      # more unimplemented: see 8.3.2, etc
+      $self->routines_offset(Games::Rezrov::StoryFile::get_word_at(ROUTINES_OFFSET));
+      $self->strings_offset(Games::Rezrov::StoryFile::get_word_at(STRINGS_OFFSET));
     }
   }
 
-  $story->set_byte_at(FLAGS_1, $f1);
+  Games::Rezrov::StoryFile::set_byte_at(FLAGS_1, $f1);
   # write back the header flags
 
-  $self->release_number($story->get_word_at(RELEASE_NUMBER));
-  $self->paged_memory_address($story->get_word_at(PAGED_MEMORY_ADDRESS));
-  $self->first_instruction_address($story->get_word_at(FIRST_INSTRUCTION_ADDRESS));
-  $self->dictionary_address($story->get_word_at(DICTIONARY_ADDRESS));
-  $self->object_table_address($story->get_word_at(OBJECT_TABLE_ADDRESS));
-  $self->global_variable_address($story->get_word_at(GLOBAL_VARIABLE_ADDRESS));
-  $self->static_memory_address($story->get_word_at(STATIC_MEMORY_ADDRESS));
-  $self->serial_code($story->get_string_at(SERIAL_CODE, 6));
+  $self->release_number(Games::Rezrov::StoryFile::get_word_at(RELEASE_NUMBER));
+  $self->paged_memory_address(Games::Rezrov::StoryFile::get_word_at(PAGED_MEMORY_ADDRESS));
+  $self->first_instruction_address(Games::Rezrov::StoryFile::get_word_at(FIRST_INSTRUCTION_ADDRESS));
+  $self->dictionary_address(Games::Rezrov::StoryFile::get_word_at(DICTIONARY_ADDRESS));
+  $self->object_table_address(Games::Rezrov::StoryFile::get_word_at(OBJECT_TABLE_ADDRESS));
+  $self->global_variable_address(Games::Rezrov::StoryFile::get_word_at(GLOBAL_VARIABLE_ADDRESS));
+  $self->static_memory_address(Games::Rezrov::StoryFile::get_word_at(STATIC_MEMORY_ADDRESS));
+  $self->serial_code(Games::Rezrov::StoryFile::get_string_at(SERIAL_CODE, 6));
   # see zmach06e.txt
-  $self->abbrev_table_address($story->get_word_at(ABBREV_TABLE_ADDRESS));
-  $self->file_checksum($story->get_word_at(CHECKSUM));
+  $self->abbrev_table_address(Games::Rezrov::StoryFile::get_word_at(ABBREV_TABLE_ADDRESS));
+  $self->file_checksum(Games::Rezrov::StoryFile::get_word_at(CHECKSUM));
 
-  my $flen = $story->get_word_at(FILE_LENGTH);
+  my $flen = Games::Rezrov::StoryFile::get_word_at(FILE_LENGTH);
   if ($version <= 3) {
     # see 11.1.6
     $flen *= 2;
@@ -271,13 +282,30 @@ sub new {
   return $self;
 }
 
+sub get_colors {
+  return (GET_BYTE_AT(FOREGROUND_COLOR),
+	  GET_BYTE_AT(BACKGROUND_COLOR));
+}
+
+';
+
+Games::Rezrov::Inliner::inline(\$INLINE_CODE);
+eval $INLINE_CODE;
+#print $INLINE_CODE;
+#die "oof";
+undef $INLINE_CODE;
+
+1;
+
+__DATA__
+
 sub get_abbreviation_addr {
   my ($self, $entry) = @_;
   # Spec 3.3: fetch and convert the "word address" of the given entry
   # in the abbreviations table.
 #  print STDERR "gaa\n";
   my $abbrev_addr = $self->abbrev_table_address() + ($entry * 2);
-  return $self->story()->get_word_at($abbrev_addr) * 2;
+  return Games::Rezrov::StoryFile::get_word_at($abbrev_addr) * 2;
   # "word address"; only used for abbreviations (packed address
   # rules do not apply here)
 }
@@ -286,34 +314,28 @@ sub set_columns {
   # 8.4: set the dimensions of the screen.
   # only needed in v4+
   # arg: number of columns
-  $_[0]->story()->set_byte_at(SCREEN_WIDTH_CHARS, $_[1]);
+  Games::Rezrov::StoryFile::set_byte_at(SCREEN_WIDTH_CHARS, $_[1]);
   if ($_[0]->version >= 5) {
-    $_[0]->story()->set_byte_at($_[0]->version >= 6 ?
-				FONT_WIDTH_UNITS_V6 : FONT_WIDTH_UNITS_V5, 1);
-    $_[0]->story()->set_word_at(SCREEN_WIDTH_UNITS, $_[1]);
+    Games::Rezrov::StoryFile::set_byte_at($_[0]->version >= 6 ?
+					  FONT_WIDTH_UNITS_V6 : FONT_WIDTH_UNITS_V5, 1);
+    Games::Rezrov::StoryFile::set_word_at(SCREEN_WIDTH_UNITS, $_[1]);
     # ?
   }
 }
 
 sub set_rows {
   # arg: number of rows
-  $_[0]->story()->set_byte_at(SCREEN_HEIGHT_LINES, $_[1]);
+  Games::Rezrov::StoryFile::set_byte_at(SCREEN_HEIGHT_LINES, $_[1]);
   if ($_[0]->version >= 5) {
-    $_[0]->story()->set_byte_at($_[0]->version >= 6 ?
-				FONT_HEIGHT_UNITS_V6 : FONT_HEIGHT_UNITS_V5, 1);
-    $_[0]->story()->set_word_at(SCREEN_HEIGHT_UNITS, $_[1]);
+    Games::Rezrov::StoryFile::set_byte_at($_[0]->version >= 6 ?
+		FONT_HEIGHT_UNITS_V6 : FONT_HEIGHT_UNITS_V5, 1);
+    Games::Rezrov::StoryFile::set_word_at(SCREEN_HEIGHT_UNITS, $_[1]);
   }
 }
 
 sub wants_color {
   # 8.3.4: does the game want to use colors?
-  return $_[0]->story()->get_word_at(FLAGS_2) & WANTS_COLOR ? 1 : 0;
-}
-
-sub get_colors {
-  my $story = $_[0]->story();
-  return ($story->get_byte_at(FOREGROUND_COLOR),
-	  $story->get_byte_at(BACKGROUND_COLOR));
+  return Games::Rezrov::StoryFile::get_word_at(FLAGS_2) & WANTS_COLOR ? 1 : 0;
 }
 
 

@@ -5,6 +5,7 @@ use Carp qw(cluck);
 use strict;
 
 use Games::Rezrov::StoryFile;
+use Games::Rezrov::Inliner;
 
 use constant SPACE => 32;
 
@@ -14,23 +15,11 @@ my @alpha_table = (
 		   [ '_','^','0','1','2','3','4','5','6','7','8','9','.',',','!','?','_','#','\'','"','/','\\','-',':','(',')' ]
 );
 
-sub new {
-  my ($type, $story) = @_;
-  my $self = {};
-  bless $self, $type;
-  $self->story($story);
-  return $self;
-}
-
-sub story {
-  $_[0]->{"story"} = $_[1] if defined $_[1];
-  return $_[0]->{"story"};
-}
-
+my $INLINE_CODE = '
 sub decode_text {
   my ($self, $address, $buf_ref) = @_;
   # decode and return text at this address; see spec section 3
-  # in list context, returns address after decoding.
+  # in array context, returns address after decoding.
   my $buffer = "";
   $buf_ref = \$buffer unless ($buf_ref);
   # $buf_ref supplied if called recursively
@@ -41,10 +30,11 @@ sub decode_text {
   my $two_bit_code = 0;
   my $two_bit_flag = 0;
   # spec 3.4
-  my $story = $self->story();
+  my $flen = Games::Rezrov::StoryFile::header()->file_length();
       
   while (1) {
-    $word = $story->get_word_at($address);
+    last if $address >= $flen;
+    $word = GET_WORD_AT($address);
     $address += 2;
     # spec 3.2
     for ($zshift = 10; $zshift >= 0; $zshift -= 5) {
@@ -64,7 +54,8 @@ sub decode_text {
       } elsif ($abbreviation > 0) {
 	# synonym/abbreviation; spec 3.3
 	my $entry = (32 * ($abbreviation - 1)) + $zchar;
-	my $addr = $story->header()->get_abbreviation_addr($entry);
+#	print STDERR "abbrev $abbreviation\n";
+	my $addr = Games::Rezrov::StoryFile::header()->get_abbreviation_addr($entry);
 	$self->decode_text($addr, $buf_ref);
 	$abbreviation = 0;
       } elsif ($zchar == 0) {
@@ -112,8 +103,19 @@ sub decode_text {
     last if (($word & 0x8000) > 0);
   }
   
+#  print STDERR "dc at $address = \"$buffer\"\n";
   return wantarray ? (\$buffer, $address) : \$buffer;
 }
+';
 
+Games::Rezrov::Inliner::inline(\$INLINE_CODE);
+eval $INLINE_CODE;
+undef $INLINE_CODE;
+
+sub new {
+  my $self = [];
+  bless $self, shift;
+  return $self;
+}
 
 1;

@@ -2,6 +2,7 @@ package Games::Rezrov::ZObjectStatus;
 
 use strict;
 use SelfLoader;
+use Carp qw(confess);
 
 use Games::Rezrov::MethodMaker qw(
 				  is_player
@@ -18,12 +19,13 @@ use Games::Rezrov::MethodMaker qw(
 __DATA__
 
 sub new {
-  my ($type, $id, $story, $object_cache) = @_;
+  confess unless @_ == 3;
+  my ($type, $id, $object_cache) = @_;
   my $self = {};
   bless $self, $type;
 
-  my $pid = $story->player_object() || -1;
-  my $current_room = $story->current_room() || -1;
+  my $pid = Games::Rezrov::StoryFile::player_object() || -1;
+  my $current_room = Games::Rezrov::StoryFile::current_room() || -1;
   my $zo = $object_cache->get($id);
   my $levels = 0;
   my $last;
@@ -50,4 +52,3 @@ sub new {
   
   return $self;
 }
-

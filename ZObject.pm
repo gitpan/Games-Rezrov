@@ -5,9 +5,9 @@ package Games::Rezrov::ZObject;
 use strict;
 use Games::Rezrov::ZProperty;
 use Games::Rezrov::ZText;
+use Games::Rezrov::Inliner;
 use Games::Rezrov::MethodMaker ([],
 			 qw(
-			    story
 			    prop_addr
 			    object_id
 			    pointer_size
@@ -16,7 +16,6 @@ use Games::Rezrov::MethodMaker ([],
 			    sibling_offset
 			    child_offset
 			    parent_offset
-			    properties_offset
 			    property_cache
 			   ));
 
@@ -24,68 +23,14 @@ use SelfLoader;
 
 #use Carp qw(cluck);
 
-1;
-
-__DATA__
-
-sub new {
-  my ($type, $object_id, $story) = @_;
-
-#  cluck "new zobj $object_id!\n" if $object_id == 0;
-  return undef if $object_id == 0;
-  # no such object
-  
-  my $self = [];
-#  my $self = {};
-  bless $self, $type;
-
-  die unless $story;
-  $self->object_id($object_id);
-  $self->story($story);
-  my $header = $story->header();
-
-  my $attrib_offset = $header->attribute_starter() +
-    $header->object_bytes() * ($object_id - 1);
-  
-  my $pointer_size = $header->pointer_size();
-  $self->pointer_size($pointer_size);
-
-  my $parent_offset = $attrib_offset + $header->attribute_bytes();
-  my $sibling_offset = $parent_offset + $pointer_size;
-  my $child_offset = $sibling_offset + $pointer_size;
-  my $properties_offset = $child_offset + $pointer_size;
-
-  my $prop_addr = $story->get_word_at($properties_offset);
-  my $text_words = $story->get_byte_at($prop_addr);
-  # spec section 12.4: property table header,
-  # first byte is length of "short name" text
-  $self->property_start_index($prop_addr + 1 + ($text_words * 2));
-  
-  $self->prop_addr($prop_addr);
-  $self->attrib_offset($attrib_offset);
-  $self->parent_offset($parent_offset);
-  $self->sibling_offset($sibling_offset);
-  $self->child_offset($child_offset);
-  $self->properties_offset($properties_offset);
-  $self->property_cache({});
-
-  return $self;
-}
-
-
-sub get_property {
-  # arg: property number
-  my $zp;
-  my $pc = $_[0]->property_cache();
-#  printf STDERR "want prop %s of obj %s (%s)...", $_[1], $_[0]->object_id(), ${$_[0]->print};
-  if (0 and $zp = $pc->{$_[1]}) {
-#    printf STDERR "cache hit\n";
-    return $zp;
+my $INLINE_CODE = '
+sub get_ptr {
+  # get a value, depending on pointer size
+  # args: offset
+  if ($_[0]->pointer_size() == 1) {
+    return GET_BYTE_AT($_[1]);
   } else {
-    $zp = new Games::Rezrov::ZProperty($_[1], $_[0], $_[0]->story());
-    $pc->{$_[1]} = $zp;
-#    print STDERR "\n";
-    return $zp;
+    return GET_WORD_AT($_[1]);
   }
 }
 
@@ -104,21 +49,129 @@ sub test_attr {
   my $bit_position = ($attribute % 8);
   # which bit in the byte (starting at high bit, counted as #0)
   my $bit_shift = 7 - $bit_position;
-  my $story = $self->story();
-  my $the_byte = $story->get_byte_at($self->attrib_offset() + $byte_offset);
+  my $the_byte = GET_BYTE_AT($self->attrib_offset + $byte_offset);
   my $the_bit = ($the_byte >> $bit_shift) & 0x01;
   # move target bit into least significant byte
 
   if (Games::Rezrov::ZOptions::SNOOP_ATTR_TEST()) {
-    $story->write_text(sprintf "[Test attribute %d of %s (%s) = %d]",
-		       $attribute,
-		       $self->object_id(),
-		       ${$self->print()},
-		      $the_bit == 1);
-    $story->newline();
+    write_message(sprintf "[Test attribute %d of %s (%s) = %d]",
+		  $attribute,
+		  $self->object_id(),
+		  ${$self->print()},
+                  $the_bit == 1);
   }
 
   return ($the_bit == 1);
+}
+
+sub set_attr {
+  # set an attribute for an object; spec 12.3.1
+  my ($self, $attribute) = @_;
+  my $byte_offset = $attribute / 8;
+  my $bit_position = $attribute % 8;
+  my $bit_shift = 7 - $bit_position;
+  my $mask = 1 << $bit_shift;
+  my $where = $self->attrib_offset() + $byte_offset;
+  my $the_byte = GET_BYTE_AT($where);
+  $the_byte |= $mask;
+  Games::Rezrov::StoryFile::set_byte_at($where, $the_byte);
+  if (Games::Rezrov::ZOptions::SNOOP_ATTR_SET()) {
+    write_message(sprintf "[Set attribute %d of %s (%s)]",
+		  $attribute,
+		  $self->object_id(),
+		  ${$self->print()});
+  }
+}
+
+sub clear_attr {
+  # clear an attribute for an object; spec 12.3.1
+  my ($self, $attribute) = @_;
+  my $byte_offset = $attribute / 8;
+  my $bit_position = ($attribute % 8);
+  my $bit_shift = 7 - $bit_position;
+  my $mask = ~(1 << $bit_shift);
+  my $where = $self->attrib_offset() + $byte_offset;
+  my $the_byte = GET_BYTE_AT($where);
+  $the_byte &= $mask;
+  Games::Rezrov::StoryFile::set_byte_at($where, $the_byte);
+  if (Games::Rezrov::ZOptions::SNOOP_ATTR_CLEAR()) {
+    write_message(sprintf "[Clear attribute %d of %s (%s)]",
+		  $attribute,
+		  $self->object_id(),
+		  ${$self->print()}
+                  );
+  }
+}
+
+sub new {
+  my ($type, $object_id) = @_;
+
+#  cluck "new zobj $object_id!\n" if $object_id == 0;
+  return undef if $object_id == 0;
+  # no such object
+  
+  my $self = [];
+#  my $self = {};
+  bless $self, $type;
+
+  $self->object_id($object_id);
+  my $header = Games::Rezrov::StoryFile::header();
+
+  my $attrib_offset = $header->attribute_starter() +
+    $header->object_bytes() * ($object_id - 1);
+  
+  my $pointer_size = $header->pointer_size();
+  $self->pointer_size($pointer_size);
+
+  my $parent_offset = $attrib_offset + $header->attribute_bytes();
+  my $sibling_offset = $parent_offset + $pointer_size;
+  my $child_offset = $sibling_offset + $pointer_size;
+  my $properties_offset = $child_offset + $pointer_size;
+
+  my $prop_addr = GET_WORD_AT($properties_offset);
+  my $text_words = GET_BYTE_AT($prop_addr);
+  # INLINE ME
+
+  # spec section 12.4: property table header,
+  # first byte is length of "short name" text
+  $self->property_start_index($prop_addr + 1 + ($text_words * 2));
+  
+  $self->prop_addr($prop_addr);
+  $self->attrib_offset($attrib_offset);
+  $self->parent_offset($parent_offset);
+  $self->sibling_offset($sibling_offset);
+  $self->child_offset($child_offset);
+  $self->property_cache({});
+
+  return $self;
+}
+
+';
+
+Games::Rezrov::Inliner::inline(\$INLINE_CODE);
+eval $INLINE_CODE;
+undef $INLINE_CODE;
+
+
+1;
+
+__DATA__
+
+
+sub get_property {
+  # arg: property number
+  my $zp;
+  my $pc = $_[0]->property_cache();
+#  printf STDERR "want prop %s of obj %s (%s)...", $_[1], $_[0]->object_id(), ${$_[0]->print};
+  if ($zp = $pc->{$_[1]}) {
+#    printf STDERR "cache hit\n";
+    return $zp;
+  } else {
+    $zp = new Games::Rezrov::ZProperty($_[1], $_[0]);
+    $pc->{$_[1]} = $zp;
+#    print STDERR "\n";
+    return $zp;
+  }
 }
 
 sub remove {
@@ -175,12 +228,11 @@ sub get_child {
 sub get_object {
   # fetch ZObject with address at specified story byte
   my ($self, $offset) = @_;
-  my $story = $self->story();
-  my $header = $story->header();
+  my $header = Games::Rezrov::StoryFile::header();
 
   my $id = $self->get_ptr($offset);
   if ($id >= 1 && $id <= $header->max_objects()) {
-    return new Games::Rezrov::ZObject($id, $story);
+    return new Games::Rezrov::ZObject($id);
   } elsif ($id == 0) {
     # object id 0 means "nothing", return null
     return undef;
@@ -194,20 +246,9 @@ sub set_ptr {
   # args: offset value
   # set a value, depending on pointer size
   if ($_[0]->pointer_size() == 1) {
-    $_[0]->story()->set_byte_at($_[1], $_[2]);
+    Games::Rezrov::StoryFile::set_byte_at($_[1], $_[2]);
   } else {
-    $_[0]->story()->set_word_at($_[1], $_[2]);
-  }
-}
-
-sub get_ptr {
-  # get a value, depending on pointer size
-  # args: offset
-  my $story = $_[0]->story();
-  if ($_[0]->pointer_size() == 1) {
-    return $story->get_byte_at($_[1]);
-  } else {
-    return $story->get_word_at($_[1]);
+    Games::Rezrov::StoryFile::set_word_at($_[1], $_[2]);
   }
 }
 
@@ -236,72 +277,15 @@ sub set_sibling_id {
   $_[0]->set_ptr($_[0]->sibling_offset(), $_[1]);
 }
 
-sub set_attr {
-  # set an attribute for an object; spec 12.3.1
-  my ($self, $attribute) = @_;
-  my $story = $self->story();
-  my $byte_offset = $attribute / 8;
-  my $bit_position = $attribute % 8;
-  my $bit_shift = 7 - $bit_position;
-  my $mask = 1 << $bit_shift;
-  my $where = $self->attrib_offset() + $byte_offset;
-  my $the_byte = $story->get_byte_at($where);
-  $the_byte |= $mask;
-  $story->set_byte_at($where, $the_byte);
-  if (Games::Rezrov::ZOptions::SNOOP_ATTR_SET()) {
-    $story->write_text(sprintf "[Set attribute %d of %s (%s)]",
-		       $attribute,
-		       $self->object_id(),
-		       ${$self->print()});
-    $story->newline();
-  }
-}
-
-sub clear_attr {
-  # clear an attribute for an object; spec 12.3.1
-  my ($self, $attribute) = @_;
-  my $story = $self->story();
-  my $byte_offset = $attribute / 8;
-  my $bit_position = ($attribute % 8);
-  my $bit_shift = 7 - $bit_position;
-  my $mask = ~(1 << $bit_shift);
-  my $where = $self->attrib_offset() + $byte_offset;
-  my $the_byte = $story->get_byte_at($where);
-  $the_byte &= $mask;
-  $story->set_byte_at($where, $the_byte);
-  if (Games::Rezrov::ZOptions::SNOOP_ATTR_CLEAR()) {
-    $story->write_text(sprintf "[Clear attribute %d of %s (%s)]",
-		       $attribute,
-		       $self->object_id(),
-		       ${$self->print()},
-   );
-    $story->newline();
-  }
-}
-
 sub print {
   my ($self, $text) = @_;
-  $text = new Games::Rezrov::ZText($self->story()) unless $text;
+  $text = new Games::Rezrov::ZText() unless $text;
   # eek
-  return $text->decode_text($self->prop_addr() + 1);
+  return scalar $text->decode_text($self->prop_addr() + 1);
 }
 
-sub validate {
-  # guess if this is a valid object or not; a few sanity checks
-  # UNUSED
-  my ($self, $max_objects) = @_;
-
-  return 0 if $self->object_id() < 1;
-
-  my $offset = $self->get_ptr($self->parent_offset());
-  return 0 if $offset < 0 or $offset > $max_objects;
-  $offset = $self->get_ptr($self->sibling_offset());
-  return 0 if $offset < 0 or $offset > $max_objects;
-  $offset = $self->get_ptr($self->child_offset());
-  return 0 if $offset < 0 or $offset > $max_objects;
-  # Hopeless: bad data is always in range :(
-
-  return 1;
+sub write_message {
+  Games::Rezrov::StoryFile::write_text(shift, 1);
 }
 
 1;

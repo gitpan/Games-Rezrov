@@ -3,7 +3,6 @@ package Games::Rezrov::ZStatus;
 
 use Games::Rezrov::MethodMaker ([],
 			 qw(
-			    story
 			    score
 			    moves
 			    hours
@@ -15,42 +14,44 @@ use Games::Rezrov::MethodMaker ([],
 
 use Games::Rezrov::Inliner;
 
+1;
+
 my $INLINE_CODE = '
 sub update () {
   # refresh information required for status line.
   my $self = shift;
-  my $story = $self->story();
   
   # get the current location:
-  my $object_id = $story->get_global_var(0);
+  my $object_id = get_global(0);
   # 8.2.2.1
   
-  my $zobj = new Games::Rezrov::ZObject($object_id, $story);
-  $self->location(${$zobj->print($story->ztext())});
+  my $zobj = new Games::Rezrov::ZObject($object_id);
+  # FIX ME: use cache
+  $self->location(${$zobj->print(Games::Rezrov::StoryFile::ztext())});
 #  die "loc = $location";
 
+  my $g1 = get_global(1);
+  my $g2 = get_global(2);
   if ($self->time_game()) {
-    $self->hours($story->get_global_var(1));
-    $self->minutes($story->get_global_var(2));
+    $self->hours($g1);
+    $self->minutes($g2);
   } else {
-    $self->score(SIGNED_WORD($story->get_global_var(1)));
-    $self->moves($story->get_global_var(2));
+    $self->score(SIGNED_WORD($g1));
+    $self->moves($g2);
   }
 }
 ';
 
 Games::Rezrov::Inliner::inline(\$INLINE_CODE);
+#print $INLINE_CODE;
+#die;
 eval $INLINE_CODE;
 undef $INLINE_CODE;
 
-
 sub new {
-  my ($type, $story) = @_;
-  
   my $self = [];
-  bless $self, $type;
+  bless $self, shift;
   
-  $self->story($story);
   $self->hours(0);
   $self->minutes(0);
   $self->moves(0);
@@ -58,12 +59,16 @@ sub new {
   $self->time_game(0);
   $self->score_game(0);
   
-  if ($story->header()->is_time_game()) {
+  if (Games::Rezrov::StoryFile::header()->is_time_game()) {
     $self->time_game(1);
   } else {
     $self->score_game(1);
   }
   return $self;
+}
+
+sub get_global {
+  return Games::Rezrov::StoryFile::get_global_var($_[0]);
 }
 
 

@@ -42,7 +42,8 @@ sub find_module {
   #
   #  Determine whether or not a given Perl module or library is installed
   #
-  eval { require "$_[0]";};
+  my $cmd = 'use ' . $_[0];
+  eval $cmd;
   return $@ ? 0 : 1;
 }
 

@@ -3,7 +3,9 @@ package Games::Rezrov::Quetzal;
 # http://www.geocities.com/SiliconValley/Vista/6631/
 
 use strict;
+
 use Games::Rezrov::QChunk;
+#use Games::Rezrov::StoryFile;
 
 use constant IFHD => "IFhd";
 use constant CMEM => "CMem";
@@ -18,10 +20,9 @@ use SelfLoader;
 __DATA__
 
 sub new {
-  my ($type, $story) = @_;
+  my ($type) = @_;
   my $self = {};
   bless $self, $type;
-  $self->story($story);
   return $self;
 }
 
@@ -36,15 +37,11 @@ sub restore {
   if ($undo) {
     @chunks = @{$undo};
   } else {
-    unless ($filename) {
-      $self->error_message($self->story()->snide_message());
-      return 0;
-    }
-
     unless (open(RESTORE, $filename)) {
       $self->error_message("Can't open $filename: $!");
       return 0;
     }
+    Games::Rezrov::StoryFile::current_room(0);
     binmode RESTORE;
     my $id = read_chunk_id(\*RESTORE);
     my $master_length;
@@ -125,15 +122,11 @@ sub save {
     # compressed memory; much smaller but slower to create
     push @chunks, $self->create_cmem();
   }
-  push @chunks, $self->create_stks($undo);
+  push @chunks, $self->create_stks();
 
   if ($undo) {
     return \@chunks;
   } else {
-    unless ($filename) {
-      $self->error_message($self->story()->snide_message());
-      return 0;
-    }
     unless (open(SAVE, ">$filename")) {
       $self->error_message("Can't write to $filename: $!");
       return 0;
@@ -157,10 +150,6 @@ sub save {
 
 sub return_pc {
   return (defined $_[1] ? $_[0]->{"return_pc"} = $_[1] : $_[0]->{"return_pc"});
-}
-
-sub story {
-  return (defined $_[1] ? $_[0]->{"story"} = $_[1] : $_[0]->{"story"});
 }
 
 sub error_message {
@@ -193,45 +182,31 @@ sub compare_ifhd {
   # compare version info from save file to the game we're running.
   # see spec 5.4
   my ($self, $ifhd) = @_;
-  my $story = $self->story();
 
   my $release_number = $ifhd->get_word();
   my $serial_number = $ifhd->get_string(6);
   my $checksum = $ifhd->get_word();
   my $return_pc = $ifhd->get_word_3();
 
-  return $story->is_this_game($release_number, $serial_number, $checksum) ?
-    $return_pc : 0;
+  return Games::Rezrov::StoryFile::is_this_game($release_number, $serial_number, $checksum) ? $return_pc : 0;
 }
 
 sub decode_umem {
   my ($self, $chunk) = @_;
-  my $story = $self->story();
-  if (1) {
-    my $story_b = $story->get_story();
-    my $data = $chunk->get_data();
-    substr($$story_b,0,length $$data) = $$data;
-  } else {
-    # reliable but slow
-    my $story_pointer = 0;
-    my $len = $chunk->get_data_length();
-    #  while ($chunk->eof() == 0) {
-    while ($len--) {
-      $story->set_byte_at($story_pointer++, $chunk->get_byte());
-    }
-  }
+  my $story_b = Games::Rezrov::StoryFile::get_story();
+  my $data = $chunk->get_data();
+  substr($$story_b, 0, length $$data) = $$data;
 }
 
 sub decode_cmem {
   # XOR-RL compressed diff of dynamic memory vs original memory.
   # see spec 3.7
   my ($self, $chunk) = @_;
-  my $story = $self->story();
   my ($i, $b, $orig);
   # unsigned
   my $zlen;
   my $story_pointer = 0;
-  my $static_start = $story->header()->static_memory_address();
+  my $static_start = Games::Rezrov::StoryFile::header()->static_memory_address();
   $chunk->reset_read_pointer();
   # might be from RAM
 
@@ -241,19 +216,18 @@ sub decode_cmem {
       # zero means a run of "zero" bytes (no difference from original story)
       $zlen = $chunk->get_byte() + 1;
       while ($zlen) {
-	$story->set_byte_at($story_pointer,
-			    $story->save_area_byte($story_pointer));
+	Games::Rezrov::StoryFile::set_byte_at($story_pointer, Games::Rezrov::StoryFile::save_area_byte($story_pointer));
 	$zlen--;
 	$story_pointer++;
       }
     } else {
       # a literal byte, XOR'ed
-      $orig = $story->save_area_byte($story_pointer);
-      $story->set_byte_at($story_pointer++, $b ^ $orig);
+      $orig = Games::Rezrov::StoryFile::save_area_byte($story_pointer);
+      Games::Rezrov::StoryFile::set_byte_at($story_pointer++, $b ^ $orig);
     }
   }
   while ($story_pointer < $static_start) {
-    $story->set_byte_at($story_pointer, $story->save_area_byte($story_pointer));
+    Games::Rezrov::StoryFile::set_byte_at($story_pointer, Games::Rezrov::StoryFile::save_area_byte($story_pointer));
     $story_pointer++;
   }
 }
@@ -264,7 +238,6 @@ sub decode_stks {
   # see spec section 4
   # FIX ME: return status!
   my @calls;
-  my $story = $self->story();
   
   while ($chunk->eof() == 0) {
     print STDERR "---- Frame: " if DEBUG;
@@ -278,30 +251,33 @@ sub decode_stks {
     # spec 4.3.2, 4.3.6: last 4 bits hold number of local vars
     my $result_var = $chunk->get_byte();
     # 4.3.3: variable number to store result.  Ignored for v3?
-    my $zf;
+    my $zf = [];
     if (($flags & 0x10) > 0) {
-      $zf = new Games::Rezrov::ZFrame($rpc);
-      $zf->call_type(Games::Rezrov::ZFrame::PROCEDURE);
+      $zf->[Games::Rezrov::StoryFile::FRAME_RPC] = $rpc;
+      $zf->[Games::Rezrov::StoryFile::FRAME_CALL_TYPE] =
+	Games::Rezrov::StoryFile::FRAME_PROCEDURE;
 #      print STDERR ("proc type frame: TEST ME\n");
     } else {
-      $zf = new Games::Rezrov::ZFrame(--$rpc);
-      $zf->call_type(Games::Rezrov::ZFrame::FUNCTION);
+      $zf->[Games::Rezrov::StoryFile::FRAME_RPC] = --$rpc;
+      $zf->[Games::Rezrov::StoryFile::FRAME_CALL_TYPE] = 
+	Games::Rezrov::StoryFile::FRAME_FUNCTION;
       # Q: Why are save file stack PCs incremented by one?
       # A: Because save file contains PC after reading variable # for
       #    result, reading it in increments PC.
       # Q2: Why do we record this, when returning back up the
       #     stack will read it anyway???
-      if ($zf->rpc() > 0) {
+      if ($rpc > 0) {
 	# FIX ME
 	# aside from dummy frame, check if the result variable sent
 	# with this frame matches the result variable in the story file
-	printf STDERR "function, %d\n", $zf->rpc() if DEBUG;
-	my $r2 = $story->get_byte_at($zf->rpc());
-	die "Result variable mismatch; wtf?!" if ($r2 != $result_var);
+	printf STDERR "function, %d\n", $rpc if DEBUG;
+	my $r2 = Games::Rezrov::StoryFile::get_byte_at($rpc);
+	die "Result variable mismatch; $r2 vs $result_var, wtf?!" if ($r2 != $result_var);
       } else {
 	# dummy frame:
 	printf STDERR "dummy\n" if DEBUG;
-	$zf->call_type(Games::Rezrov::ZFrame::DUMMY);
+	$zf->[Games::Rezrov::StoryFile::FRAME_CALL_TYPE] =
+	  Games::Rezrov::StoryFile::FRAME_DUMMY;
       }
     }
     # FIX ME: sanity check
@@ -313,29 +289,31 @@ sub decode_stks {
     for ($i=0; $i < $var_count; $i++) {
       # local variables; 4.3.6
       my $local_var = $chunk->get_word();
-      printf STDERR "Restore local var %d = %d\n", $i, $local_var if DEBUG;
-      $zf->set_local_var($i, $local_var);
+      printf STDERR "Restore local var %d = %d\n", $i + 1, $local_var if DEBUG;
+      $zf->[Games::Rezrov::StoryFile::FRAME_LOCAL + $i] = $local_var;
     }
+    $#$zf = Games::Rezrov::StoryFile::FRAME_ROUTINE - 1;
+    # expand frame so routine variables will start to be added at correct index
     for ($i=0; $i < $eval_stack_count; $i++) {
       # stack variables; 4.3.7
       my $stack_var = $chunk->get_word();
       printf STDERR "Restore routine: %d\n", $stack_var if DEBUG;
-      $zf->routine_push($stack_var);
+      push @{$zf}, $stack_var;
     }
     push @calls, $zf;
   }
-  $story->set_game_state(\@calls, $self->return_pc());
+  Games::Rezrov::StoryFile::set_game_state(\@calls, $self->return_pc());
 }
 
 sub create_ifhd {
   # create IFHD header chunk
   my $self = shift;
   my $ifhd = new Games::Rezrov::QChunk(IFHD);
-  my $zh = $self->story()->header();
+  my $zh = Games::Rezrov::StoryFile::header();
   $ifhd->add_word($zh->release_number());
   $ifhd->add_string($zh->serial_code(), 6);
   $ifhd->add_word($zh->file_checksum());
-  $ifhd->add_word_3($self->story()->get_pc());
+  $ifhd->add_word_3(Games::Rezrov::StoryFile::get_pc());
   $ifhd->reset_read_pointer();
   return $ifhd;
 }
@@ -343,11 +321,10 @@ sub create_ifhd {
 sub create_umem {
   # save dynamic memory data: simple dump, see 3.8
   my $self = shift;
-  my $story = $self->story();
-  my $story_b = $story->get_story();
+  my $story_b = Games::Rezrov::StoryFile::get_story();
   my $umem = new Games::Rezrov::QChunk(UMEM);
   $umem->add_data(substr($$story_b,0,
-			 $story->header()->static_memory_address()));
+			 Games::Rezrov::StoryFile::header()->static_memory_address()));
   $umem->reset_read_pointer();
   return $umem;
 }
@@ -356,11 +333,10 @@ sub create_cmem {
   # save dynamic memory data:
   # create XOR-RLL memory diff; see spec 3.7
   my $self = shift;
-  my $story = $self->story();
   my $cmem = new Games::Rezrov::QChunk(CMEM);
-  my $save_bytes = $story->header()->static_memory_address();
-  my $save_area = $story->get_save_area();
-  my $story_b = $story->get_story();
+  my $save_bytes = Games::Rezrov::StoryFile::header()->static_memory_address();
+  my $save_area = Games::Rezrov::StoryFile::get_save_area();
+  my $story_b = Games::Rezrov::StoryFile::get_story();
   my $diff = substr($$story_b,0,$save_bytes) ^ $$save_area;
   # XOR the game state with the original game state
   
@@ -396,71 +372,76 @@ sub create_cmem {
 
 sub create_stks {
   # save stack data: see spec 4.3
-  my ($self, $undo) = @_;
-  my $story = $self->story();
+  my ($self) = @_;
   my $stks = new Games::Rezrov::QChunk(STKS);
-  my @call_stack = @{$story->call_stack()};
-  pop @call_stack unless $undo;
-  # Normal saves discard the most recent frame, relating to the
-  # actual save operation.  If we do save it, we'll see a second
-  # "Ok" prompt (one for the restore, and the other from the
-  # initial save).
-  #
-  # Note that undo emulation slots must save ALL frames.
-  #
-  # ... WTF?
+  my @call_stack = @{Games::Rezrov::StoryFile::call_stack()};
+  # a copy!
   
   foreach my $zf (@call_stack) {
     # Save frames, oldest first.
     my $result_var = 0;
-    my $rpc = $zf->rpc();
+    my $rpc = $zf->[Games::Rezrov::StoryFile::FRAME_RPC];
     print STDERR "---- Frame: " if DEBUG;
-    if ($zf->is_dummy()) {
+    my $ftype = $zf->[Games::Rezrov::StoryFile::FRAME_CALL_TYPE];
+    my $local_var_count = 0;
+    if ($ftype == Games::Rezrov::StoryFile::FRAME_DUMMY) {
       # first frame is "dummy" frame, should have all fields set to zero.
       print STDERR "dummy\n" if DEBUG;
       $stks->add_word_3(0);
-    } elsif ($zf->is_function()) {
-      # called as a function
-      printf STDERR "function, %d\n", $rpc if DEBUG;
-      $result_var = $story->get_byte_at($rpc);
-      # get the variable number used to store the result of 
-      # this function call.  Save the PC as it would appear
-      # after having read the variable number.
-      $stks->add_word_3($rpc + 1);
+      $local_var_count = 0;
+      $stks->add_byte(0);
+      $stks->add_byte(0);
+      $stks->add_byte(0);
+      # 4.11.1: dummy frame has all fields set to 0 except eval stack used
     } else {
-      # called as a procedure
-      printf STDERR "procedure, %d\n", $rpc if DEBUG;
-      $stks->add_word_3($rpc);
+      if ($ftype == Games::Rezrov::StoryFile::FRAME_FUNCTION) {
+	# called as a function
+	printf STDERR "function, %d\n", $rpc if DEBUG;
+	$result_var = Games::Rezrov::StoryFile::get_byte_at($rpc);
+	# get the variable number used to store the result of 
+	# this function call.  Save the PC as it would appear
+	# after having read the variable number.
+	$stks->add_word_3($rpc + 1);
+      } else {
+	# called as a procedure
+	printf STDERR "procedure, %d\n", $rpc if DEBUG;
+	$stks->add_word_3($rpc);
+      }
+      # 4.3.1
+      $local_var_count = Games::Rezrov::StoryFile::FRAME_MAX_LOCAL_VARIABLES;
+      # constant: always 15 local variables/frame
+      my $flag = $local_var_count;
+      if ($ftype == Games::Rezrov::StoryFile::FRAME_PROCEDURE) {
+	$flag |= 0x10;
+	$result_var = 0;
+	# 4.6
+      }
+      $stks->add_byte($flag);
+      # 4.3.2
+      $stks->add_byte($result_var);
+      # 4.3.3: var # for result
+      $stks->add_byte(0);
+      # 4.3.4: arguments supplied
+      # not used in v3?
     }
-    # 4.3.1
-    my $local_var_count = $zf->count_local_variables();
-    my $flag = $local_var_count;
-    if ($zf->is_procedure()) {
-      $flag |= 0x10;
-      $result_var = 0;
-      # 4.6
-    }
-    $stks->add_byte($flag);
-    # 4.3.2
-    $stks->add_byte($result_var);
-    # 4.3.3: var # for result
-    $stks->add_byte(0);
-    # 4.3.4: arguments supplied
-    # not used in v3?
-    my $routine_stack = $zf->routine_stack();
-    $stks->add_word(scalar @{$routine_stack});
-    # 4.3.5
+
+    $stks->add_word($#$zf - Games::Rezrov::StoryFile::FRAME_ROUTINE + 1);
+    # 4.3.5: how many routine variables?
     
+    my $value;
     for (my $i=0; $i < $local_var_count; $i++) {
       # 4.3.6: save local variables
-      printf STDERR "Save local var %d = %d\n", $i, $zf->get_local_var($i) if DEBUG;
-      $stks->add_word($zf->get_local_var($i));
+      $value = $zf->[Games::Rezrov::StoryFile::FRAME_LOCAL + $i] || 0;
+      printf STDERR "Save local var %d = %d\n", $i + 1, $value if DEBUG;
+      $stks->add_word($value);
     }
     
-    foreach (@{$routine_stack}) {
-      # 4.3.7, 4.7: oldest first
-      printf STDERR "Save routine: $_\n" if DEBUG;
-      $stks->add_word($_);
+    for (my $i = Games::Rezrov::StoryFile::FRAME_ROUTINE;
+	 $i <= $#$zf; $i++) {
+      # 4.3.7, 4.7: save routine variables, oldest first
+      $value = $zf->[$i];
+      printf STDERR "Save routine: $value\n" if DEBUG;
+      $stks->add_word($value);
     }
   }
 

@@ -18,6 +18,27 @@ COPYRIGHT
 
 REVISION HISTORY
 
+ 0.16  Sun Mar  7 20:50:43 EST 1999
+        - more optimizations:
+           - ZFrame.pm gone, call stack now in StoryFile.pm
+           - a bit more "macro"-style inlining
+           - StoryFile.pm is now completely static; oh well,
+             it was never truly OO anyway.
+           - overall about 20-25% faster.  Don't know if I can
+             speed it up any more.  Suggestions very welcome!
+        - perl 5.005 is now required.
+        - tentative support for new v8 games; "anchorhead.z8" starts,
+          but looks like you'll need a gHz to play it  :/
+        - new cheat command: "spiel", decode *all* game text.
+          Can reveal easter eggs, debug messages, and all-around
+          interesting things you may have missed; see documentation
+        - partial support for character graphics in Tk and Curses
+          interfaces; Beyond Zork now works much much better.
+          [see screenshots at WWW site above]
+        - fix a few bugs with interactions between undo/restore and 
+          some cheat commands
+        - fix Quetzal compatibility bug
+
  0.15  Sun Jan 24 17:41:39 EST 1999
         - Optimizations:
            - some memory-access and variable casting functions
@@ -75,7 +96,7 @@ PREREQUISITES
 
  Rezrov is written in pure perl, no extension compilation is required.
 
- Perl version 5.004 or later is required.
+ Perl version 5.005 or later is required.
 
  Optionally supported but not required:
     Tk (version 800.*)
@@ -106,8 +127,8 @@ MANUAL INSTALLATION INSTRUCTIONS
  path (@INC).  "rezrov" is the main wrapper program that requires these
  modules to run; it can go anywhere you like.
 
- For example, on a Windows 95/98/etc machine, using the perl5.004_02
- "bindist" distribution installed in C:\PERL, you would need to:
+ For example, on a Windows 95/98/etc machine, using the ActiveState
+ distribution of perl 5.005 installed in C:\PERL, you would need to:
 
  1. mkdir C:\perl\lib\site\Games
  2. mkdir C:\perl\lib\site\Games\Rezrov

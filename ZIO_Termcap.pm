@@ -94,7 +94,7 @@ sub new {
   }
   $upper_lines = 0;
 
-  if ($options{"readline"} and find_module("Term/ReadLine.pm")) {
+  if ($options{"readline"} and find_module('Term::ReadLine')) {
     $have_term_readline = 1;
     $tr = new Term::ReadLine 'what?', \*main::STDIN, \*main::STDOUT;
     $tr->ornaments(0);
@@ -112,10 +112,9 @@ sub update {
 
 sub set_version {
   # called by the game
-  my ($self, $story, $status_needed, $callback) = @_;
-  $self->story($story);
-  $story->rows($rows);
-  $story->columns($columns);
+  my ($self, $status_needed, $callback) = @_;
+  Games::Rezrov::StoryFile::rows($rows);
+  Games::Rezrov::StoryFile::columns($columns);
   return 0;
 }
 
@@ -142,7 +141,7 @@ sub newline {
   
   $_[0]->absolute_move(0, $abs_y);
 
-  $_[0]->story()->register_newline();
+  Games::Rezrov::StoryFile::register_newline();
 }
 
 sub write_zchar {
@@ -194,11 +193,15 @@ sub get_input {
     } elsif ($have_term_readline) {
       # readline insists on resetting the line so we need to give it
       # everything up to the cursor position.
-      $result = $tr->readline($self->story()->prompt_buffer());
+      $result = $tr->readline(Games::Rezrov::StoryFile::prompt_buffer());
       # this doesn't work with v5+ preloaded input
     } else {
       $result = <STDIN>;
       # this doesn't work with v5+ preloaded input
+      unless (defined $result) {
+	$result = "";
+	print "\n";
+      }
     }
     chomp $result;
     $result = "" unless defined($result);
