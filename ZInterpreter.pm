@@ -2,6 +2,8 @@ package Games::Rezrov::ZInterpreter;
 # interpret z-code
 
 use strict;
+no strict "refs";
+# maybe a little faster here than during opcode call?
 
 use Games::Rezrov::Inliner;
 
@@ -15,6 +17,101 @@ use constant OP_EXT => 4;
 use constant CALL_VN2 => 0x1a;
 use constant CALL_VS2 => 0x0c;
 # var opcodes
+
+my $INTERPRETER_GENERATED = 0;
+
+sub new {
+  my ($type, $zio) = @_;
+  my $self = {};
+  bless $self, $type;
+
+  generate_interpreter_code();
+  # delay code generation until now so we can add optional code
+  # (or not include it) based on runtime options
+
+  $self->zio($zio);
+
+  if (my $where = Games::Rezrov::ZOptions::WRITE_OPCODES()) {
+    if ($where eq "STDERR") {
+      *Games::Rezrov::ZInterpreter::LOG = \*main::STDERR;
+    } else {
+      die "Can't write to $where: $!\n"
+	unless open(LOG, ">$where");
+    }
+    my $old = select();
+    select LOG;
+    $|=1;
+    select $old;
+  }
+
+  $self->restart(1);
+  $self->interpret();
+  return $self;
+}
+
+sub generate_interpreter_code {
+  unless ($INTERPRETER_GENERATED) {
+    # Generate code for main interpreter routine.
+    # add optional chunks of code only if they're being used, to
+    # make the loops as tight as possible.  Good for a small
+    # speed improvement.
+
+    local $/ = undef;    
+    my $inline_code = <DATA>;
+
+    my $CODE;
+
+    if (Games::Rezrov::ZOptions::WRITE_OPCODES()) {
+      $CODE = '
+      printf LOG "count:%d style:%d pc:%d type:%s opcode:%d(0x%02x;raw=%d) (%s) operands:%s\n",
+      $opcode_count,
+      $op_style,
+      $start_pc,
+      $TYPE_LABELS[$op_style],
+      $opcode,
+      $opcode,
+      $orig_opcode,
+      ($generic_opcodes[$op_style]->[$opcode] ||
+       $manual_descs[$op_style]->[$opcode] || "???"),
+      join(",", @operands);
+';
+
+     $inline_code =~ s/#WRITE_OPCODES_STUB/$CODE/ || die;
+    }
+
+    if (Games::Rezrov::ZOptions::COUNT_OPCODES()) {
+      $CODE='
+$op_counts[$op_style]++;
+';
+     $inline_code =~ s/#COUNT_OPCODES_STUB/$CODE/ || die;
+    }
+
+    Games::Rezrov::Inliner::inline(\$inline_code);
+
+#    print $inline_code;die;
+
+    eval $inline_code;
+
+    $INTERPRETER_GENERATED = 1;
+  }
+}
+
+sub zio {
+  return (defined $_[1] ? $_[0]->{"zio"} = $_[1] : $_[0]->{"zio"});
+}
+
+sub restart {
+  my ($self, $first_time) = @_;
+  Games::Rezrov::StoryFile::reset_storyfile() unless $first_time;
+  Games::Rezrov::StoryFile::reset_game();
+}
+
+1;
+
+#
+#  code to be inlined starts here:
+#
+__DATA__
 
 my @TYPE_LABELS;
 $TYPE_LABELS[OP_0OP] = "0OP";
@@ -40,114 +137,116 @@ $TYPE_LABELS[OP_EXT] = "EXT";
 my (@ext_ops, @generic_opcodes, @manual_descs);
 
 my @zero_ops;
-$zero_ops[0x00] = 'rtrue';
-$zero_ops[0x01] = 'rfalse';
-$zero_ops[0x02] = 'print_text';
-$zero_ops[0x03] = 'print_ret';
-$zero_ops[0x04] = 'nop';
-$zero_ops[0x05] = 'save';
-$zero_ops[0x06] = 'restore';
+$zero_ops[0x00] = "rtrue";
+$zero_ops[0x01] = "rfalse";
+$zero_ops[0x02] = "print_text";
+$zero_ops[0x03] = "print_ret";
+$zero_ops[0x04] = "nop";
+$zero_ops[0x05] = "save";
+$zero_ops[0x06] = "restore";
 # 0x07 handled manually (restart)
-$zero_ops[0x08] = 'ret_popped';
-$zero_ops[0x09] = 'stack_pop';
+$zero_ops[0x08] = "ret_popped";
+$zero_ops[0x09] = "stack_pop";
 # 0x0a handled manually (quit)
-$zero_ops[0x0b] = 'newline';
-$zero_ops[0x0c] = 'display_status_line';
-$zero_ops[0x0d] = 'verify';
+$zero_ops[0x0b] = "newline";
+$zero_ops[0x0c] = "display_status_line";
+$zero_ops[0x0d] = "verify";
 # 0x0e = first byte of extended opcode
-$zero_ops[0x0f] = 'piracy';
+$zero_ops[0x0f] = "piracy";
 
 my @one_ops;
-$one_ops[0x00] = 'compare_jz';
-$one_ops[0x01] = 'get_sibling';
-$one_ops[0x02] = 'get_child';
-$one_ops[0x03] = 'get_parent';
-$one_ops[0x04] = 'get_property_length';
-$one_ops[0x05] = 'increment';
-$one_ops[0x06] = 'decrement';
-$one_ops[0x07] = 'print_addr';
-$one_ops[0x08] = 'call_func';
-$one_ops[0x09] = 'remove_object';
-$one_ops[0x0a] = 'print_object';
+$one_ops[0x00] = "compare_jz";
+$one_ops[0x01] = "get_sibling";
+$one_ops[0x02] = "get_child";
+$one_ops[0x03] = "get_parent";
+$one_ops[0x04] = "get_property_length";
+$one_ops[0x05] = "increment";
+$one_ops[0x06] = "decrement";
+$one_ops[0x07] = "print_addr";
+$one_ops[0x08] = "call_func";
+$one_ops[0x09] = "remove_object";
+$one_ops[0x0a] = "print_object";
 # 0x0b handled manually; ret(), possibly async
-$manual_descs[OP_1OP]->[0x0b] = 'ret';
-$one_ops[0x0c] = 'jump';
-$one_ops[0x0d] = 'print_paddr';
-$one_ops[0x0e] = 'load_variable';
-$one_ops[0x0f] = 'not_or_possibly_call';
+$manual_descs[OP_1OP]->[0x0b] = "ret";
+$one_ops[0x0c] = "jump";
+$one_ops[0x0d] = "print_paddr";
+$one_ops[0x0e] = "load_variable";
+$one_ops[0x0f] = "not_or_possibly_call";
 
 my @two_ops;
-$two_ops[0x01] = 'compare_je';
-$two_ops[0x02] = 'compare_jl';
-$two_ops[0x03] = 'compare_jg';
-$two_ops[0x04] = 'dec_jl';
-$two_ops[0x05] = 'inc_jg';
-$two_ops[0x06] = 'jin';
-$two_ops[0x07] = 'test_flags';
-$two_ops[0x08] = 'bitwise_or';
-$two_ops[0x09] = 'bitwise_and';
-$two_ops[0x0a] = 'test_attr';
-$two_ops[0x0b] = 'set_attr';
-$two_ops[0x0c] = 'clear_attr';
-$two_ops[0x0d] = 'set_variable';
-$two_ops[0x0e] = 'insert_obj';
-$two_ops[0x0f] = 'get_word_index';
-$two_ops[0x10] = 'loadb';
-$two_ops[0x11] = 'get_property';
-$two_ops[0x12] = 'get_property_addr';
-$two_ops[0x13] = 'get_next_property';
-$two_ops[0x14] = 'add';
-$two_ops[0x15] = 'subtract';
-$two_ops[0x16] = 'multiply';
-$two_ops[0x17] = 'divide';
-$two_ops[0x18] = 'mod';
-$two_ops[0x19] = 'call_func';
-$two_ops[0x1a] = 'call_proc';
-$two_ops[0x1b] = 'set_color';
-$two_ops[0x1c] = 'throw';
+$two_ops[0x01] = "compare_je";
+$two_ops[0x02] = "compare_jl";
+$two_ops[0x03] = "compare_jg";
+$two_ops[0x04] = "dec_jl";
+$two_ops[0x05] = "inc_jg";
+$two_ops[0x06] = "jin";
+$two_ops[0x07] = "test_flags";
+$two_ops[0x08] = "bitwise_or";
+$two_ops[0x09] = "bitwise_and";
+$two_ops[0x0a] = "test_attr";
+$two_ops[0x0b] = "set_attr";
+$two_ops[0x0c] = "clear_attr";
+#$two_ops[0x0d] = "set_variable";
+$two_ops[0x0d] = "z_store";
+$two_ops[0x0e] = "insert_obj";
+$two_ops[0x0f] = "get_word_index";
+$two_ops[0x10] = "loadb";
+$two_ops[0x11] = "get_property";
+$two_ops[0x12] = "get_property_addr";
+$two_ops[0x13] = "get_next_property";
+$two_ops[0x14] = "add";
+$two_ops[0x15] = "subtract";
+$two_ops[0x16] = "multiply";
+$two_ops[0x17] = "divide";
+$two_ops[0x18] = "mod";
+$two_ops[0x19] = "call_func";
+$two_ops[0x1a] = "call_proc";
+$two_ops[0x1b] = "set_color";
+$two_ops[0x1c] = "throw";
 
 my @var_ops;
-$var_ops[0x00] = 'call_func';
-$var_ops[0x01] = 'store_word';
-$var_ops[0x02] = 'store_byte';
-$var_ops[0x03] = 'put_property';
+$var_ops[0x00] = "call_func";
+$var_ops[0x01] = "store_word";
+$var_ops[0x02] = "store_byte";
+$var_ops[0x03] = "put_property";
 # 0x04 handled manually (read_line)
-$manual_descs[OP_VAR]->[0x04] = 'read_line';
-$var_ops[0x05] = 'write_zchar';
-$var_ops[0x06] = 'print_num';
-$var_ops[0x07] = 'random';
-$var_ops[0x08] = 'routine_push';
-$var_ops[0x09] = 'pull';
-$var_ops[0x0a] = 'split_window';
-$var_ops[0x0b] = 'set_window';
-$var_ops[CALL_VS2] = 'call_func';  # 0x0c
-$var_ops[0x0d] = 'erase_window';
-$var_ops[0x0e] = 'erase_line';
-$var_ops[0x0f] = 'set_cursor';
-$var_ops[0x10] = 'get_cursor';
-$var_ops[0x11] = 'set_text_style';
-$var_ops[0x12] = 'set_buffering';
-$var_ops[0x13] = 'output_stream';
-$var_ops[0x14] = 'input_stream';  # example: minizork.z3, "#comm"
-$var_ops[0x15] = 'play_sound_effect';
+$manual_descs[OP_VAR]->[0x04] = "read_line";
+$var_ops[0x05] = "write_zchar";
+$var_ops[0x06] = "print_num";
+$var_ops[0x07] = "random";
+$var_ops[0x08] = "routine_push";
+$var_ops[0x09] = "pull";
+$var_ops[0x0a] = "split_window";
+$var_ops[0x0b] = "set_window";
+$var_ops[CALL_VS2] = "call_func";  # 0x0c
+$var_ops[0x0d] = "erase_window";
+$var_ops[0x0e] = "erase_line";
+$var_ops[0x0f] = "set_cursor";
+$var_ops[0x10] = "get_cursor";
+$var_ops[0x11] = "set_text_style";
+$var_ops[0x12] = "set_buffering";
+$var_ops[0x13] = "output_stream";
+$var_ops[0x14] = "input_stream";  # example: minizork.z3, "#comm"
+$var_ops[0x15] = "play_sound_effect";
 # 0x16 handled manually (read_char)
-$manual_descs[OP_VAR]->[0x16] = 'read_char';
-$var_ops[0x17] = 'scan_table';
-$var_ops[0x18] = 'z_not';
-$var_ops[0x19] = 'call_proc';
-$var_ops[CALL_VN2] = 'call_proc';  # 0x1a
-$var_ops[0x1b] = 'tokenize';
-$var_ops[0x1c] = 'encode_text';
-$var_ops[0x1d] = 'copy_table';
-$var_ops[0x1e] = 'print_table';
-$var_ops[0x1f] = 'check_arg_count';
+$manual_descs[OP_VAR]->[0x16] = "read_char";
+$var_ops[0x17] = "scan_table";
+$var_ops[0x18] = "z_not";
+$var_ops[0x19] = "call_proc";
+$var_ops[CALL_VN2] = "call_proc";  # 0x1a
+$var_ops[0x1b] = "tokenize";
+$var_ops[0x1c] = "encode_text";
+$var_ops[0x1d] = "copy_table";
+$var_ops[0x1e] = "print_table";
+$var_ops[0x1f] = "check_arg_count";
 
-$ext_ops[0x00] = 'save';
-$ext_ops[0x01] = 'restore';
-$ext_ops[0x02] = 'log_shift';
-$ext_ops[0x04] = 'set_font';
-$ext_ops[0x09] = 'save_undo';
-$ext_ops[0x0a] = 'restore_undo';
+$ext_ops[0x00] = "save";
+$ext_ops[0x01] = "restore";
+$ext_ops[0x02] = "log_shift";
+$ext_ops[0x03] = "art_shift";
+$ext_ops[0x04] = "set_font";
+$ext_ops[0x09] = "save_undo";
+$ext_ops[0x0a] = "restore_undo";
 
 $generic_opcodes[OP_0OP] = \@zero_ops;
 $generic_opcodes[OP_1OP] = \@one_ops;
@@ -155,9 +254,7 @@ $generic_opcodes[OP_2OP] = \@two_ops;
 $generic_opcodes[OP_VAR] = \@var_ops;
 $generic_opcodes[OP_EXT] = \@ext_ops;
 
-my $INLINE_CODE = '
-
-sub interpret {
+*Games::Rezrov::ZInterpreter::interpret = sub {
   #
   # Your sword is glowing with a faint blue glow.
   #
@@ -173,7 +270,6 @@ sub interpret {
   my $oc;
   my $input_counts = 0;
   my $count_opcodes = Games::Rezrov::ZOptions::COUNT_OPCODES();
-  my $write_opcodes = Games::Rezrov::ZOptions::WRITE_OPCODES();
   my $thing;
 
   my $var_ops = 0;
@@ -279,7 +375,7 @@ sub interpret {
       }
 #      printf STDERR "%s: ", $operand_types;
       for (; $i >=0; $i -= 2) {
-	# sadly, it\'s slower to pack() the optypes and extract the
+	# sadly, it's slower to pack() the optypes and extract the
 	# elements with vec($operand_types, $x, 2) than to bit-twiddle.
 	$optype = ($operand_types >> $i) & 0x03;
 #	print STDERR "$optype\n";
@@ -308,26 +404,15 @@ sub interpret {
     #  code or (further) convoluting the structure of this routine.
     #
 
-    if ($write_opcodes) {
-      # FIX ME: speed?
-      printf LOG "count:%d pc:%d type:%s opcode:%d(0x%02x;raw=%d) (%s) operands:%s\n",
-      $opcode_count,
-      $start_pc,
-      $TYPE_LABELS[$op_style],
-      $opcode,
-      $opcode,
-      $orig_opcode,
-      ($generic_opcodes[$op_style]->[$opcode] ||
-       $manual_descs[$op_style]->[$opcode] || "???"),
-      join(",", @operands);
-    }
+#WRITE_OPCODES_STUB
+
+#COUNT_OPCODES_STUB
 
     #
     # Opcode types in order of frequency based on a completely 
     # unscientific test of Zorks 1-3 seem to be:
     #    2OP, 1OP, VAR, 0OP
     #
-    $op_counts[$op_style]++;
     if ($oc = $generic_opcodes[$op_style]->[$opcode]) {
       #
       #  Process opcodes 0/1/2/var/ext (old version):  5.43 secs
@@ -338,9 +423,12 @@ sub interpret {
       #
 #      die unless @operands == $op_style;
 #      $story->$oc(@operands);
-      no strict "refs";
+#      no strict "refs";
       &{"Games::Rezrov::StoryFile::$oc"}(@operands);
       # @operands contains the correct number of operands; just pass them
+
+      # This is hideous.
+      # Might it run faster if subs were exported?
     } elsif ($op_style == OP_1OP) {
       #
       # one operand opcodes
@@ -398,54 +486,17 @@ sub interpret {
   }
 
   $zio->newline();
-  $zio->write_string("*** End of session ***");
-  $zio->newline();
-  $zio->update();
-  $zio->get_input(1,1);
+  if (Games::Rezrov::ZOptions::END_OF_SESSION_MESSAGE) {
+    $zio->write_string("*** End of session ***");
+    $zio->newline();
+    $zio->update();
+    $zio->get_input(1,1);
+  }
 
   $zio->set_game_title(" ") if Games::Rezrov::StoryFile::game_title();
   $zio->cleanup();
   printf "Opcode counts: %s\n", join " ", @op_counts if $count_opcodes;
-}
-';
-
-Games::Rezrov::Inliner::inline(\$INLINE_CODE);
-eval $INLINE_CODE;
-
-sub new {
-  my ($type, $zio) = @_;
-  my $self = {};
-  bless $self, $type;
-
-  $self->zio($zio);
-
-  if (my $where = Games::Rezrov::ZOptions::WRITE_OPCODES()) {
-    if ($where eq "STDERR") {
-      *Games::Rezrov::ZInterpreter::LOG = \*main::STDERR;
-    } else {
-      die "Can't write to $where: $!\n"
-	unless open(LOG, ">$where");
-    }
-    my $old = select();
-    select LOG;
-    $|=1;
-    select $old;
-  }
-
-  $self->restart(1);
-  $self->interpret();
-  return $self;
-}
-
-sub zio {
-  return (defined $_[1] ? $_[0]->{"zio"} = $_[1] : $_[0]->{"zio"});
-}
-
-sub restart {
-  my ($self, $first_time) = @_;
-  Games::Rezrov::StoryFile::reset_storyfile() unless $first_time;
-  Games::Rezrov::StoryFile::reset_game();
-}
+};
 
 sub zi_die {
   my ($self, $style, $opcode, $count) = @_;
@@ -453,6 +504,3 @@ sub zi_die {
   $self->zio()->fatal_error(sprintf "Unknown/unimplemented %s opcode %d (0x%02x), \#%d", $desc, $opcode, $opcode, $count);
 
 }
-
-1;
-

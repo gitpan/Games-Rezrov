@@ -200,7 +200,16 @@ sub store_result {
 
   if ($where == 0) {
     # routine stack: push value
-    # see zmach06e, p 33
+    # see zmach06e.txt section 7.1 (page 33):
+
+    # A variable number is a byte that indicates a certain variable.
+    # The meaning of a variable number is:
+    #      0: the top of the routine stack;
+    #   1-15: the local variable with that number;
+    # 16-255: the global variable with that number minus 16.
+    
+    # Writing to the variable with number 0 means to push a value onto
+    # the routine stack; reading this variable means pulling a value off.
     routine_push(UNSIGNED_WORD($_[0]));
     # make sure the value is cast into unsigned form.
     # see add() for a lengthy debate on the subject.
@@ -469,6 +478,9 @@ sub print_num {
 sub inc_jg {
   my ($variable, $value) = @_;
   # increment a variable, and branch if it is now greater than value.
+  # **indirect?**
+  $value = SIGNED_WORD($value);
+
   my $before = SIGNED_WORD(get_variable($variable));
   my $new_val = SIGNED_WORD($before + 1);
   set_variable($variable, $new_val);
@@ -477,12 +489,14 @@ sub inc_jg {
 
 sub increment {
   # increment a variable (16 bits, signed).  arg: variable #
+  # **indirect?**
   my $value = SIGNED_WORD(get_variable($_[0])) + 1;
   set_variable($_[0], UNSIGNED_WORD($value));
 }
 
 sub decrement {
   # decrement a variable (16 bits, signed)
+  # **indirect?**
   my $value = SIGNED_WORD(get_variable($_[0])) - 1;
   set_variable($_[0], UNSIGNED_WORD($value));
 }
@@ -490,7 +504,8 @@ sub decrement {
 sub dec_jl {
   my ($variable, $value) = @_;
   # decrement a signed 16-bit variable, and branch if it is now less than value.
-  # FIX ME: is value signed or not???
+  # **indirect?**
+  $value = SIGNED_WORD($value);
 
   my $before = SIGNED_WORD(get_variable($variable));
   my $new_val = SIGNED_WORD($before - 1);
@@ -524,17 +539,39 @@ sub mod {
   }
 }
 
+sub z_store {
+  # opcode to set variable
+  # **indirect**
+  set_variable($_[0], $_[1], 1);
+  # when called as an opcode, set indirect stack reference flag
+}
+
 sub set_variable {
   # args: 
   #   $_[0] = $variable
   #   $_[1] = $value
+  #   $_[2] = if nonzero, "indirect stack reference" mode (see draft spec 1.1)
 #  printf STDERR "set_variable %s = %s\n", $_[1], $_[2];
   # see spec 4.2.2
   if ($_[0] == 0) {
-    # top of routine stack; should we push, or just set?
-    # does this ever get called like this, or is it always
-    # via store_result?  (apparent discepancy in zip source code)
-    die "hmm, does this ever happen?\n";
+    # "top of routine stack": do we push, or just set?
+    # draft spec 1.1 says under certain circumstances we should just
+    # manipulate the first stack variable, and not push/pop.
+    # 
+    # - for the 7 opcodes mentioned, frotz 2.43 only seems to follow
+    #   the 1.1 spec for 3 of them: 
+    # 
+    #   z_store, z_load, z_pull: set top of stack
+    #   z_inc, z_inc_chk: push onto stack
+    #   z_dec, z_dec_chk: pop from stack
+
+    if ($_[2]) {
+      # indirect stack reference mode
+      $current_frame->[$#$current_frame] = UNSIGNED_WORD($_[1]);
+      # just set top variable, don\'t push
+    } else {
+      routine_push($_[1]);
+    }
   } elsif ($_[0] <= 15) {
     # local variable
     $current_frame->[FRAME_LOCAL + $_[0] - 1] = UNSIGNED_WORD($_[1]);
@@ -569,12 +606,20 @@ sub set_variable {
   }
 }
 
-sub log_shift {
+sub art_shift {
+  # sect15.html#art_shift; ARiThmetic shift
   my $number = SIGNED_WORD($_[0]);
   my $places = SIGNED_WORD($_[1]);
-  my $result = $places > 0 ? $number << $places : abs($number) >> abs($places);
-  # sign bit is lost when shifting right
-  store_result($result);
+  store_result($places > 0 ? $number << $places : $number >> abs($places));
+  # sign bit persists after right shift
+}
+
+sub log_shift {	
+  # sect15.html#log_shift; LOGical shift
+  my $number = UNSIGNED_WORD($_[0]);
+  my $places = SIGNED_WORD($_[1]);
+  store_result($places > 0 ? $number << $places : abs($number) >> abs($places));
+  # sign bit cleared during right shift
 }
 
 sub get_property_length {
@@ -605,7 +650,7 @@ sub get_property_length {
       $result = $size_byte & 0x3f;
       if ($result == 0) {
 	# 12.4.2.1.1
-	print STDERR "wacky inform size; check this\n";
+#	print STDERR "wacky inform compiler size; check this\n";
 	$result = 64;
       }
     } else {
@@ -614,6 +659,11 @@ sub get_property_length {
     }
   }
   store_result($result);
+}
+
+sub z_not {
+    # sect15.html#not
+    store_result(~$_[0]);
 }
 
 sub verify {
@@ -690,6 +740,25 @@ sub set_global_var {
   }
 }
 
+sub random {
+  my $value = SIGNED_WORD($_[0]);
+  # return a random number between 1 and specified number.
+  # With arg 0, seed random number generator, return 0
+  # With arg < 0, seed with that value, return 0
+  my $result = 0;
+  if ($value == 0) {
+    # seed the random number generator
+    srand();
+  } elsif ($value < 0) {
+    # use specified value as a seed
+    srand($value);
+  } else {
+    $result = int(rand($value)) + 1;
+  }
+  store_result($result);
+}
+
+
 ';
 
 Games::Rezrov::Inliner::inline(\$INLINE_CODE);
@@ -748,6 +817,20 @@ sub setup {
   }
   
   load();
+
+   my @no_title_games = (
+			 [ Games::Rezrov::ZDict::SAMPLER1 ],
+			 [ Games::Rezrov::ZDict::BEYOND_ZORK ]
+			);
+
+      foreach my $game (@no_title_games) {
+	my @v = @{$game};
+	shift @v;
+	if (is_this_game(@v)) {
+	  Games::Rezrov::ZOptions::GUESS_TITLE(0);
+	}
+      }
+
   $current_input_stream = Games::Rezrov::ZConst::INPUT_KEYBOARD;
   $undo_slots = [];
   $window_cursors = [];
@@ -984,7 +1067,8 @@ sub push_frame {
 
 sub load_variable {
   # get the value of a variable and store it.
-  store_result(get_variable($_[0]));
+  # **indirect**
+  store_result(get_variable($_[0], 1));
 }
 
 sub convert_packed_address {
@@ -1022,12 +1106,18 @@ sub ret {
 
 
 sub get_variable {
-  # argument: variable
+  # $_[0]: variable
+  # $_[1]: indirect stack reference mode
   if ($_[0] == 0) {
     # section 4.2.2:
     # pop from top of routine stack
 #    print STDERR "rp\n";
-    return routine_pop();
+    if ($_[1]) {
+      # indirect stack reference
+      return $current_frame->[$#$current_frame];
+    } else {
+      return routine_pop();
+    }
   } elsif ($_[0] <= 15) {
     # a local variable
 #    print STDERR "lv\n";
@@ -1309,14 +1399,17 @@ sub insert_obj {
 
 sub pull {
   # pop a value from a stack and store in specified variable.
+  # **indirect**
   if ($version == 6) {
     if ($_[0]) {
       fatal_error("v6: pull from user stack");
     } else {
       store_result(routine_pop());
+      # broken? (indirect var?)
     }
   } else {
-    set_variable($_[0], routine_pop());
+    set_variable($_[0], routine_pop(), 1);
+    # set indirect stack reference mode
   }
 }
 
@@ -1592,6 +1685,7 @@ sub read_line {
       } else {
 	# end of file
 	input_stream(Games::Rezrov::ZConst::INPUT_KEYBOARD);
+	die "quitting!\n" if Games::Rezrov::ZOptions::PLAYBACK_DIE();
 	$s = "";
       }
     }
@@ -1776,26 +1870,6 @@ sub print_addr {
   # print the string at the address given; address is not packed
   # example: hollywood hijinx: "n", "knock"
   write_zchunk($ztext->decode_text($_[0]));
-}
-
-sub random {
-  my $value = shift;
-  # return a random number between 1 and specified number.
-  # With arg 0, seed random number generator, return 0
-  # With arg < 0, seed with that value, return 0
-  my $result = 0;
-  if ($value == 0) {
-    # seed the random number generator
-    srand();
-  } elsif ($value < 0) {
-    # use specified value as a seed
-    write_text("Specific seed used, test me!");
-    newline();
-    srand($value);
-  } else {
-    $result = int(rand($value)) + 1;
-  }
-  store_result($result);
 }
 
 sub remove_object {
@@ -2092,6 +2166,7 @@ sub filename_prompt {
   if ($filename) {
     if ($options{"-check"} and -f $filename) {
       $zio->write_string($filename . " exists, overwrite? [y/n]: ");
+      $zio->update();
       my $proceed = $zio->get_input(1, 1);
       if ($proceed =~ /y/i) {
 	write_text("Yes.");
@@ -2309,7 +2384,11 @@ sub input_stream {
     # filename provided if playing back from command line
     my $ok = 0;
     if ($fn) {
-      if (open(TRANS_IN, $fn)) {
+      if ($fn =~ /^\*main:/) {
+	# hack for test.pl
+	$ok = 1;
+	$input_filehandle = $fn;
+      } elsif (open(TRANS_IN, $fn)) {
 	$ok = 1;
 	$input_filehandle = \*TRANS_IN;
 	write_text("Playing back commands from $fn...") unless defined $filename;
@@ -2713,6 +2792,7 @@ sub is_this_game {
   # do the given release number, serial number, and checksum
   # match those of this game?
   my ($release, $serial, $checksum) = @_;
+#  printf "%s\n%s\n", join(",", @_), join ",", $header->release_number, $header->serial_code, $header->file_checksum;
   return ($header->release_number() eq $release and
 	  $header->serial_code() == $serial and
 	  $header->file_checksum() == $checksum);
@@ -2727,7 +2807,7 @@ sub get_global_var {
 sub routine_pop {
   # pop a variable from the routine stack.
   if ($#$current_frame < FRAME_ROUTINE) {
-    die "attempt to pop when no routine stack!";
+    die "yikes: attempt to pop when no routine stack!\n";
   } else {
     return pop @{$current_frame};
   }
@@ -2822,11 +2902,6 @@ sub throw {
   unimplemented();
 }
 
-sub z_not {
-  untested();
-  store_result(!$_[0]);
-}
-
 sub erase_line {
   untested();
   if ($_[0] == 1) {
@@ -2845,8 +2920,7 @@ sub get_cursor {
 
 sub untested {
   (my $subname = (caller(1))[3]) =~ s/.*://;
-  write_text(sprintf '[Untested opcode %s(); please email me if you see this!]', $subname);
-  newline();
+  printf STDERR "Untested opcode %s(); please email me if you see this!\n", $subname;
 }
 
 sub unimplemented {
@@ -2865,12 +2939,13 @@ sub nop {
 }
 
 sub piracy {
-  untested();
-  conditional_jump(0);
+    # sect15.html#piracy
+    conditional_jump(1);
 }
 
 sub not_or_possibly_call {
   # :)
+  # sect15.html#not
   if ($version < 5) {
     z_not(@_);
   } else {

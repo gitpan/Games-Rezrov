@@ -2,11 +2,11 @@ package Games::Rezrov::QChunk;
 
 use strict;
 
-use SelfLoader;
+#use SelfLoader;
 #use Carp qw(confess);
 1;
 
-__DATA__
+#__DATA__
 
 sub new {
   my ($type, $chunk_type) = @_;

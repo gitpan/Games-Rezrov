@@ -65,6 +65,12 @@ my $EMULATE_HELP = 1;
 my $TIME_24 = 0;
 # in "time games", show time in 24-hour format rather than AM/PM
 
+my $PLAYBACK_DIE = 0;
+# whether to exit after running a script file (for benchmarking)
+
+my $END_OF_SESSION_MESSAGE = 1;
+# display "end of session" message and pause when interpreter exits
+
 1;
 
 sub notifying {
@@ -162,6 +168,14 @@ sub EMULATE_HELP {
 
 sub TIME_24 {
   return (defined $_[0] ? $TIME_24 = $_[0] : $TIME_24);
+}
+
+sub PLAYBACK_DIE {
+  return (defined $_[0] ? $PLAYBACK_DIE = $_[0] : $PLAYBACK_DIE);
+}
+
+sub END_OF_SESSION_MESSAGE {
+  return (defined $_[0] ? $END_OF_SESSION_MESSAGE = $_[0] : $END_OF_SESSION_MESSAGE);
 }
 
 

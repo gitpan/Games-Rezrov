@@ -101,7 +101,7 @@ sub next {
 	  $size_bytes = 2;
 	  if ($property_len == 0) {
 	    # 12.4.2.1.1
-	    print STDERR "wacky inform compiler size; test this!"; # debug
+#	    print STDERR "wacky inform compiler size; test this!";
 	    $property_len = 64;
 	  }
 	} else {
@@ -196,7 +196,8 @@ sub set_value {
       die("set_value called on long property");
     }
   } else {
-    die("attempt to set nonexistent property");
+    die("attempt to set nonexistent property") unless $Games::Rezrov::IGNORE_PROPERTY_ERRORS;
+    # cheating
   }
 }
 

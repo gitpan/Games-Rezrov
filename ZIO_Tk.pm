@@ -68,6 +68,7 @@ sub new {
   $self->font_cache({});
   $self->zfont(Games::Rezrov::ZConst::FONT_NORMAL);
   $abs_row=0;
+
   return $self;
 }
 
@@ -83,7 +84,7 @@ sub set_version {
   my ($DEFAULT_VARIABLE_FAMILY, $DEFAULT_FONT_SIZE);
   if ($is_win32) {
       $DEFAULT_VARIABLE_FAMILY = "times new roman";
-      $DEFAULT_FONT_SIZE = 10;
+      $DEFAULT_FONT_SIZE = 14;
   } else {
       $DEFAULT_VARIABLE_FAMILY = "times";
       $DEFAULT_FONT_SIZE = 18;
@@ -705,11 +706,11 @@ sub get_input {
     }
   };
   $self->bind_keys_to($callback);
+
   while ($done == 0) {
     $c->after(10);
     # to cut down on CPU time a little (does this help?)
     $c->update();
-    # FIX ME: why do we need this???
   }
   $self->cursor_off();
   $self->blink_init(1);
@@ -810,9 +811,13 @@ sub set_game_title {
 sub cleanup {
   # don't just rely on DESTROY, doesn't work for interrupts
   $w_main->destroy() if $w_main;
-#  Tk::exit();
+
+  Tk::exit();
   # cleaner; see Tk::exit.pod.  Without, often coredumps.
   # but if we do this, will we miss a die() message elsewhere?
+  
+  # November 2003: Tk-804.025_beta6 segfaults on exit, WTF?
+  # Didn't use to!
 }
 
 sub validate_family {

@@ -2,22 +2,38 @@ rezrov - an Infocom game interpreter
 
 DESCRIPTION
 
- Rezrov is an implementation of a z-machine written in pure perl.  In 
+ Rezrov is an implementation of a z-machine written in pure Perl.  In 
  other words, it's a program that can play Infocom games, such as Zork.
  Its chief distinguishing feature from other z-code interpreters is a wide 
  array of cheat commands.  Full documentation, in POD format, can be 
  found embedded in the file "rezrov".
 
- See http://www.voicenet.com/~mikeedmo/rezrov/ for online documentation,
- screenshots, etc.
+ For online documentation, screenshots, etc. visit:
+
+   http://edmonson.paunix.org/rezrov/
+
+ Rezrov's old home was http://www.voicenet.com/~mikeedmo/rezrov/.
 
 COPYRIGHT
 
- Copyright (c) 1998, 1999 Michael Edmonson <edmonson@poboxes.com>.  All
- rights reserved.  This program is free software; you can redistribute
- it and/or modify it under the same terms as Perl itself.
+ Copyright (c) 1998-2004 Michael Edmonson <edmonson@sdf.lonestar.org>.
+ All rights reserved.  This program is free software; you can
+ redistribute it and/or modify it under the same terms as Perl itself.
 
 REVISION HISTORY
+
+ 0.18  Wed Feb  4 22:31:08 EST 2004
+        - cleanup/bugfix release
+        - various fixes to pass Amir Karger's "czech" test suite (ver. 0.8)
+        - 2 silly new cheats, which only work in Zork I for now:
+            - "vilify": make an object attackable
+            - "baste"/"nosh": make an object edible
+        - improved test routine (should work with automated testing systems now)
+        - manual_install.pl for Windows and other platforms without "make"
+        - auto-disabled (problematic) title guessing for Beyond Zork and sampler
+        - cleaned up a few annoying warning messages (termcap, tk, win32)
+        - fixed "lingo" cheat crash (ahem)
+        - slightly smarter "help" handling
 
  0.17  Sun Jun 13 16:18:49 EDT 1999
         - new cheat commands:
@@ -117,7 +133,7 @@ REVISION HISTORY
 
 PREREQUISITES
 
- Rezrov is written in pure perl, no extension compilation is required.
+ Rezrov is written in pure Perl, no extension compilation is required.
 
  Perl version 5.005 or later is required.
 
@@ -130,6 +146,8 @@ PREREQUISITES
 
 HOW TO BUILD AND INSTALL
 
+See the manual instructions below if you have trouble.
+
  perl Makefile.PL
  make
  make test
@@ -138,11 +156,20 @@ HOW TO BUILD AND INSTALL
  After installation, run rezrov on a z-code file, such as the
  provided minizork.z3: "rezrov minizork.z3".
 
-MANUAL INSTALLATION INSTRUCTIONS
+MANUAL INSTALLATION INSTRUCTIONS (Windows, etc.)
 
- If you are using a binary distribution of perl the "generic" instructions
- above will most likely fail.  The following are instructions on how
- to install rezrov by hand.
+ On some platforms (e.g., binary distributions of Perl under Windows),
+ the "generic" instructions above probably won't work.
+ 
+ If you're feeling lucky, try running the provided
+ "manual_install.pl".  This creates appropriate directories in your
+ Perl installation and copies everything where it needs to go.  It
+ works for me under Windows XP, but I haven't tested other platforms
+ (please let me know one way or the other!).
+
+EXTREMELY MANUAL INSTALLATION INSTRUCTIONS
+
+ The following are instructions on how to install rezrov by hand:
 
  Rezrov consists of two basic pieces: a set of packages (*.pm files),
  and a script called "rezrov".  The *.pm files need to be installed
@@ -150,8 +177,8 @@ MANUAL INSTALLATION INSTRUCTIONS
  path (@INC).  "rezrov" is the main wrapper program that requires these
  modules to run; it can go anywhere you like.
 
- For example, on a Windows 95/98/etc machine, using the ActiveState
- distribution of perl 5.005 installed in C:\PERL, you would need to:
+ For example, on a Windows 9x/NT/XP machine, using the ActiveState
+ distribution of Perl installed in C:\PERL, you would need to:
 
  1. mkdir C:\perl\lib\site\Games
  2. mkdir C:\perl\lib\site\Games\Rezrov

@@ -5,6 +5,10 @@ package Games::Rezrov::ZIO_Curses;
 use strict;
 use Carp qw(cluck confess);
 
+BEGIN {
+  $ENV{"PERL_RL"} = 'Perl';
+}
+
 @Games::Rezrov::ZIO_Curses::ISA = qw(
 				     Games::Rezrov::ZIO_Generic
 				     Games::Rezrov::ZIO_Color

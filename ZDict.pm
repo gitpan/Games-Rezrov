@@ -3,7 +3,7 @@ package Games::Rezrov::ZDict;
 
 use strict;
 use 5.004;
-use SelfLoader;
+#use SelfLoader;
 
 use Games::Rezrov::ZObjectCache;
 use Games::Rezrov::ZObject;
@@ -25,10 +25,14 @@ use Games::Rezrov::MethodMaker ([],
 			    decoded_by_address
 			    object_cache
 			    last_random
+                            tried_help
 			   ));
 
 use constant OMAP_START_INDENT => 1;
 use constant OMAP_INDENT_STEP => 3;
+
+use constant WWW_BROWSER_EXES => qw(netscape mozilla phoenix firebird);
+# add more executables here
 
 use constant ZORK_1 => ("Zork I", 88, "840726", 41257);
 use constant ZORK_2 => ("Zork II", 48, "840904", 55449);
@@ -37,6 +41,8 @@ use constant INFIDEL => ("Infidel", 22, "830916", 16674);
 use constant ZTUU => ("Zork: The Undiscovered Underground", 16, 970828, 4485);
 use constant PLANETFALL => ("Planetfall", 37, "851003", 726);
 use constant BUREAUCRACY => ("Bureaucracy", 116, 870602, 64613);
+use constant SAMPLER1 => ("Sampler", 55, 850823, 28449);
+use constant BEYOND_ZORK => ("Beyond Zork", 57, 871221, 50605);
 
 use constant SNIDE_MESSAGES => (
 				'A hollow voice says, "cretin."',
@@ -88,7 +94,8 @@ use constant TELEPORT_TO_ITEM_MESSAGES => (
 use constant SHAMELESS_MESSAGES => (
 				    "Michael Edmonson just wishes he were an Implementor.",
 				    "Michael Edmonson is a sinister, lurking presence in the dark places of the earth.  His favorite diet is onion rings from Cooke's Seafood, but his insatiable appetite is tempered by his fear of light.  Michael Edmonson has never been seen by the light of day, and few have survived his fearsome jaws to tell the tale.",
-				    "Somebody with too much time on his hands, clearly.",
+				    "Michael Edmonson has too much time on his hands.",
+				    "Michael Edmonson is at this moment most likely parked in front of his whiz-bang PC.",
 				   );
 
 use constant FROTZ_SELF_MESSAGES => (
@@ -100,7 +107,7 @@ use constant FROTZ_SELF_MESSAGES => (
 
 use constant BANISH_MESSAGES => (
 #				 'The %s disappears in a shower of sparks.',
-				 'A cloud of sinister black fog descends; when it lifts, the %s is nowhere to be seen.',
+				 'A sinister black fog descends; when it lifts, the %s is nowhere to be seen.',
 				 'There is a bright flash; when you open your eyes, the %s is nowhere to be seen.',
 				 'The %s disappears with a pop.'
 				 );
@@ -130,11 +137,40 @@ use constant LUMMOX_MESSAGES => (
 				);
 
 use constant HELP_INFOCOM_URLS => (
-				   "http://www.csd.uwo.ca/~pete/Infocom/Invisiclues/",
+				   "http://www.csd.uwo.ca/Infocom/Invisiclues/",
 				  );
 
 use constant HELP_GENERIC_URLS => (
 				   "http://www.yahoo.com/Recreation/Games/Interactive_Fiction/",
+);
+
+use constant VILIFY_MESSAGES => (
+				 "I never liked the look of that %s.",
+				 "That %s is really asking for trouble.",
+				);
+
+use constant VILIFY_SELF_MESSAGES => (
+				      "I never liked you to begin with!",
+				      "Okay...you're ugly and your mother dresses you funny.",
+				      "You are filled with self-loathing.",
+				      "You disgust me."
+				     );
+
+use constant BASTE_MESSAGES => (
+				 "The %s looks mouth-wateringly delicious.",
+#				 "The %s looks particularly toothsome.",
+				 "Mmm, %s."
+				);
+
+use constant GO_BACK_TO_X => (
+			      "New York",
+			      "San Francisco",
+			      "New Jersey",
+			     );
+
+use constant WWW_HELP_MESSAGES => (
+    "I can barely see what's going on there, but I'll see what I can do...",
+    "Perhaps your plea will be heard."
 );
 
 %Games::Rezrov::ZDict::MAGIC_WORDS = map {$_ => 1} (
@@ -160,8 +196,11 @@ use constant HELP_GENERIC_URLS => (
 						    "#sgv",
 						    "#slv",
 						    "#ggv",
+						    "#serials",
 						    "lummox",
 						    "systolic",
+						    "vilify",
+						    "baste", "nosh",
 						   );
 
 %Games::Rezrov::ZDict::ALIASES = (
@@ -225,7 +264,7 @@ undef $INLINE_CODE;
 
 1;
 
-__DATA__
+#__DATA__
 
 sub save_buffer {
   # copy the input buffer to story memory.
@@ -604,6 +643,11 @@ sub magic {
     $self->dump_objects(2);
   } elsif ($token eq "items") {
     $self->dump_objects(3);
+  } elsif ($token eq "#serials") {
+    my $header = Games::Rezrov::StoryFile::header();
+    $self->write_text(sprintf "release %s, ", $header->release_number());
+    $self->write_text(sprintf "serial number %s, ", $header->serial_code());
+    $self->write_text(sprintf "checksum %s.", $header->file_checksum());
   } elsif ($token eq "systolic") {
     # lower blood pressure (Bureaucracy only)
     $self->systolic();
@@ -646,6 +690,11 @@ sub magic {
 		      Games::Rezrov::StoryFile::get_global_var($what));
   } elsif ($token =~ "#?teleport") {
     $self->teleport($what);
+  } elsif ($token eq "baste" or $token eq "nosh") {
+    $self->baste($token, $what);
+  } elsif ($token eq "vilify") {
+    $Games::Rezrov::IGNORE_PROPERTY_ERRORS = 1;
+    $self->vilify($what);
   } elsif ($token eq "travis" or $token eq "bickle") {
     $self->travis($what);
   } elsif ($token =~ /^(frotz|futz|lumen)$/) {
@@ -739,7 +788,7 @@ sub magic {
 	  $just_one_newline = 1;
         }
       } else {
-	die "$token ?";
+	die "unknown cheat $token";
       }
     } elsif ($what) {
 $self->write_text(sprintf "I don't know what that is, though I have seen a %s that you might be interested in...", ${$object_cache->get_random()});
@@ -825,9 +874,11 @@ sub dump_dictionary {
     my %temp = %{$by_name};
     if (Games::Rezrov::ZOptions::SHAMELESS()) {
       my $token_len = Games::Rezrov::StoryFile::header()->encoded_word_length();
-      foreach my $word (qw(michael edmonson)) {
-	$word = substr($word,0,$token_len) if length $word > $token_len;
-	$temp{$word} = 1;
+      my ($word, $copy);
+      foreach $word ("michael", "edmonson") {
+        $copy = $word;
+	$copy = substr($copy,0,$token_len) if length $copy > $token_len;
+	$temp{$copy} = 1;
       }
     }
     @words = sort keys %temp;
@@ -1234,8 +1285,7 @@ sub help {
       # title disabled or not infocom
       $url = $self->random_message(HELP_GENERIC_URLS);
     }
-    $self->write_text("I'll try...");
-    call_web_browser($url);
+    $self->call_web_browser($url);
   } else {
     $self->write_text("Connect to the Internet, then maybe I'll help you.");
   }
@@ -1248,18 +1298,57 @@ sub help {
 sub call_web_browser {
   # try to call a web browser for a particular URL.
   # uses Netscape's remote-control interface if available
-  my $url = shift;
+  my ($self, $url) = @_;
   
   if ($^O eq "MSWin32") {
-    system "start $url";
-  } else {
-    my $cmd = sprintf "netscape -remote 'openURL(%s)'", $url;
-    system $cmd;
-    if ($?) {
-      # failed: Netscape isn't running, so start it
-      my $command = sprintf "netscape %s &", $url;
-      system $command;
+    if ($self->tried_help) {
+      $self->write_text("I fear another attempt to contact the Implementers will bring only their wrath instead.");
+      # for real: app seems to hang if we try this again without
+      # first closing the web browser.  How to detect this?
+    } else {
+      $self->write_text($self->random_message(WWW_HELP_MESSAGES));
+      system "start $url";
+      $self->tried_help(1);
+      # easy!
     }
+  } else {
+    # any good platform-independent way of doing this??
+    # total hack based on Linux environment
+    my @paths = split /:/, $ENV{PATH};
+    my ($browser, $basename);
+    foreach my $path (@paths) {
+      foreach my $exe (WWW_BROWSER_EXES) {
+        my $fq = $path . '/' . $exe;
+	if (-x $fq) {
+	  $browser = $fq;
+          $basename = $exe;
+	  last;
+	}	
+      }     
+      last if $browser;
+    }   
+   
+    if ($browser and $ENV{DISPLAY}) {
+      # found www browser executable on path
+      $self->write_text($self->random_message(WWW_HELP_MESSAGES));
+      my $tried_remote;
+      my $cmd;
+      if ($basename eq "netscape" or $basename eq "phoenix" or $basename eq "firebird") {
+         $tried_remote = 1;
+	 $cmd = sprintf "%s -remote 'openURL(%s)' >/dev/null 2>&1", $browser, $url;
+	 system $cmd;
+	 # try remote invocation if browser is known to support it
+      }
+      if ($tried_remote ? $? : 1) {
+         # remote command failed or browser not running
+         my $cmd = sprintf '%s %s >/dev/null 2>&1 &', $browser, $url;
+         # horrible
+         system $cmd;
+      }	    
+    } else {
+      # not X, or can't find browser, give up
+      $self->write_text(sprintf "Perhaps the answers you seek may be found at %s.  Sadly I am too feeble to take you there directly.", $url);
+    }   
   }
 }
 
@@ -1686,5 +1775,122 @@ sub systolic {
     $self->write_text("You feel a bit calmer.");
   }
 }
+
+sub vilify {
+  # cheat command --
+  # make an object attackable.
+  my ($self, $what) = @_;
+
+  my @SUPPORTED_GAMES = (
+			 [ ZORK_1, 30 ],
+			);
+
+  my @attributes = $self->support_check(@SUPPORTED_GAMES);
+  return unless @attributes;
+#  die join ",", @attributes;
+  
+  unless ($what) {
+    $self->write_text("Vilify what?");
+  } else {
+    # know how to do it
+    my $object_cache = $self->get_object_cache();
+    my @hits = $object_cache->find($what);
+    if (@hits == 1) {
+      # just right
+      my $id = $hits[0]->[0];
+      my $zo = $object_cache->get($id);
+      my $zstat = new Games::Rezrov::ZObjectStatus($id,
+						   $object_cache);
+      my $proceed = 0;
+      my $msg;
+      if ($zstat->is_player()) {
+	$proceed = 1;
+	$msg = $self->random_message(VILIFY_SELF_MESSAGES);
+      } elsif ($zstat->in_current_room()) {
+	$proceed = 1;
+	$msg = $self->random_message(VILIFY_MESSAGES);
+	if ($zstat->in_inventory()) {
+	  $msg =~ s/\.$/; I don't know why you're toting it around./;
+	}
+      } else {
+	$self->write_text(sprintf "I don't see any %s here!", $what);
+      }
+
+      if ($proceed) {
+	# with apologies to "Enchanter"  :)
+	my $desc = $zo->print();
+	$self->write_text(sprintf $msg, $$desc);
+	foreach (@attributes) {
+	  $zo->set_attr($_);
+	}
+      }
+    } elsif (@hits > 1) {
+      # too many
+      $self->write_text(sprintf 'Hmm, which do you mean: %s?',
+			 nice_list(sort map {$_->[1]} @hits));
+    } else {
+      # no matches
+      $self->write_text("What's that?");
+    }
+  }
+}
+
+sub baste {
+  # cheat command --
+  # make an object edible.
+  my ($self, $word, $what) = @_;
+
+  my @SUPPORTED_GAMES = (
+			 [ ZORK_1, 21 ],
+			);
+
+  my @attributes = $self->support_check(@SUPPORTED_GAMES);
+  return unless @attributes;
+#  die join ",", @attributes;
+  
+  unless ($what) {
+    $self->write_text(sprintf "%s what?", ucfirst(lc($word)));
+  } else {
+    # know how to do it
+    my $object_cache = $self->get_object_cache();
+    my @hits = $object_cache->find($what);
+    if (@hits == 1) {
+      # just right
+      my $id = $hits[0]->[0];
+      my $zo = $object_cache->get($id);
+      my $zstat = new Games::Rezrov::ZObjectStatus($id,
+						   $object_cache);
+      my $proceed = 0;
+      my $msg;
+      if ($zstat->is_player()) {
+	$proceed = 1;
+	$msg = sprintf 'Go back to %s!', $self->random_message(GO_BACK_TO_X);
+	# ", hippie!"
+      } elsif ($zstat->in_current_room()) {
+	$proceed = 1;
+	$msg = $self->random_message(BASTE_MESSAGES);
+      } else {
+	$self->write_text(sprintf "I don't see any %s here!", $what);
+      }
+
+      if ($proceed) {
+	# with apologies to "Enchanter"  :)
+	my $desc = $zo->print();
+	$self->write_text(sprintf $msg, $$desc);
+	foreach (@attributes) {
+	  $zo->set_attr($_);
+	}
+      }
+    } elsif (@hits > 1) {
+      # too many
+      $self->write_text(sprintf 'Hmm, which do you mean: %s?',
+			 nice_list(sort map {$_->[1]} @hits));
+    } else {
+      # no matches
+      $self->write_text("What's that?");
+    }
+  }
+}
+
 
 1;

@@ -177,6 +177,7 @@ sub get_input {
     my ($code, $char);
     while (1) {
 	@event = $IN->Input();
+	next unless defined $event[0];
 	my $known;
 	if ($event[0] == 1 and $event[1]) {
 	    # a key pressed

@@ -91,7 +91,7 @@ use Games::Rezrov::MethodMaker ([],
 			    routines_offset
 			   ));
 
-use SelfLoader;
+#use SelfLoader;
 
 1;
 
@@ -103,7 +103,7 @@ sub new {
   
   my $version = GET_BYTE_AT(0);
   if ($version < 1 or $version > 8) {
-    die "This does not appear to be a valid game file.\n";
+    die "\nThis does not appear to be a valid game file.\n";
   } elsif (($version < 3 or $version > 5) and $version != 8) {
 #  } elsif ($version < 3 or $version > 8) {
 #    die "Sorry, only z-code versions 3-8 are supported at present...\nAnd even those need work!  :)\n"
@@ -297,7 +297,7 @@ undef $INLINE_CODE;
 
 1;
 
-__DATA__
+#__DATA__
 
 sub get_abbreviation_addr {
   my ($self, $entry) = @_;

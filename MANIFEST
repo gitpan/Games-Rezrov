@@ -1,5 +1,6 @@
 README
 MANIFEST
+BUGS
 Makefile.PL
 test.pl
 GetKey.pm
@@ -33,3 +34,4 @@ Inliner.pm
 FontVectors.pm
 ZIO_Color.pm
 InlinedPrivateMethod.pm
+manual_install.pl

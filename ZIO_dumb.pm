@@ -60,9 +60,14 @@ sub io_setup {
 
   if ($readline_ok and find_module('Term::ReadLine')) {
     require Term::ReadLine;
-    $have_term_readline = 1;
     $tr = new Term::ReadLine 'what?', \*main::STDIN, \*main::STDOUT;
-    $tr->ornaments(0);
+
+    if (ref $tr eq "Term::ReadLine::Stub") {
+      # no real underlying ReadLine package active, so don't use it
+    } else {
+      $have_term_readline = 1;
+      $tr->ornaments(0);
+    }
   }
 
   $clear_prog = find_prog("clear");

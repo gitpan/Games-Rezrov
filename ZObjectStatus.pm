@@ -1,7 +1,7 @@
 package Games::Rezrov::ZObjectStatus;
 
 use strict;
-use SelfLoader;
+#use SelfLoader;
 use Carp qw(confess);
 
 use Games::Rezrov::MethodMaker qw(
@@ -16,7 +16,7 @@ use Games::Rezrov::MethodMaker qw(
 
 1;
 
-__DATA__
+#__DATA__
 
 sub new {
   confess unless @_ == 3;

@@ -230,7 +230,7 @@ sub split_window {
 }
 
 sub do_term {
-  print $terminal->Tputs($_[0], 0);
+  print $terminal->Tputs($_[0], 0) if $terminal;
 }
 
 sub attr_off {

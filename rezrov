@@ -1,11 +1,17 @@
-#!/usr/local/bin/perl -w
+#!/usr/bin/perl -w
 #
 # rezrov: a pure perl z-code interpreter
 #
-# Copyright (c) 1998, 1999 Michael Edmonson.  All rights reserved.  
-# This program is free software; you can redistribute it and/or modify 
+# Copyright (c) 1998-(infinity+1), Michael Edmonson. All rights reserved.
+# This program is free software; you may redistribute it and/or modify
 # it under the same terms as Perl itself.
 #
+# One of these email addresses "should" always work:
+#
+#   edmonson@sdf.lonestar.org
+#   mn_edmonson@world.oberlin.edu
+#
+# edmonson@poboxes.com is defunct, and mikeedmo@voicenet.com soon will be.
 
 # standard modules:
 use strict;
@@ -18,7 +24,7 @@ use Games::Rezrov::ZInterpreter;
 use Games::Rezrov::ZOptions;
 use Games::Rezrov::ZConst;
 
-$main::VERSION = $main::VERSION = '0.17';
+$main::VERSION = $main::VERSION = '0.18';
 # twice to shut up perl -w
 
 my %FLAGS;
@@ -79,6 +85,7 @@ use constant OPTIONS =>
    "undo=i",
    "readline=i",
    "playback=s",
+   "playback-die",
    "id=i",
    "tandy",
    "hack=i",
@@ -86,6 +93,7 @@ use constant OPTIONS =>
    "force",
    "checksum",
    "24h",
+   "eos=i",
   );
 
 unless (GetOptions(\%FLAGS, OPTIONS)) {
@@ -110,6 +118,7 @@ Games::Rezrov::ZOptions::MAXIMUM_SCROLLING($FLAGS{"max-scroll"} ? 1 : 0);
 Games::Rezrov::ZOptions::COUNT_OPCODES($FLAGS{"count-opcodes"} ? 1 : 0);
 Games::Rezrov::ZOptions::WRITE_OPCODES(exists $FLAGS{"debug"} ? $FLAGS{"debug"} || "STDERR" : 0);
 Games::Rezrov::ZOptions::TIME_24(exists $FLAGS{"24h"} ? 1 : 0);
+Games::Rezrov::ZOptions::PLAYBACK_DIE(exists $FLAGS{"playback-die"} ? 1 : 0);
 
 if (exists $FLAGS{"undo"}) {
   Games::Rezrov::ZOptions::EMULATE_UNDO($FLAGS{"undo"});
@@ -136,6 +145,8 @@ if (exists $FLAGS{"id"}) {
 Games::Rezrov::ZOptions::TANDY_BIT(1) if exists $FLAGS{"tandy"};
 Games::Rezrov::ZOptions::SHAMELESS($FLAGS{"shameless"}) if exists $FLAGS{"shameless"};
 
+Games::Rezrov::ZOptions::END_OF_SESSION_MESSAGE($FLAGS{"eos"}) if exists $FLAGS{"eos"};
+
 use constant INTERFACES => (
 			    ["tk", "Tk", \&tk_validate ],
 			    ["win32", "Win32::Console"],
@@ -143,7 +154,7 @@ use constant INTERFACES => (
 			    # because setscrreg() doesn't seem to work
 			    # w/Curses for win32 (5.004 bindist)
 			    ["curses", "Curses"],
-			    ["termcap", [ "Term::Cap", "POSIX" ] ],
+			    ["termcap", [ "Term::Cap", "POSIX" ], \&termcap_validate ],
 			    ["dumb" ],
 			   );
 # available interfaces
@@ -194,6 +205,7 @@ if ($zio_type eq "tk") {
 } elsif ($zio_type eq "termcap") {
   # address terminal w/Term::Cap
   require Games::Rezrov::ZIO_Termcap;
+  $FLAGS{"readline"} = 1 if (!exists($FLAGS{"readline"}) and exists $ENV{"TERM"});
   $zio = new Games::Rezrov::ZIO_Termcap(%FLAGS);
 } else {
   # dumb terminal and/or limited perl installation
@@ -211,8 +223,6 @@ $SIG{"INT"} = sub {
   exit 1;
 };
 
-Games::Rezrov::ZOptions::GUESS_TITLE(0) unless $zio->can_change_title();
-
 #
 #  Initialize story file
 #
@@ -220,8 +230,11 @@ $story = new Games::Rezrov::StoryFile($storyfile, $zio);
 Games::Rezrov::StoryFile::font_3_disabled(1) if $FLAGS{"no-graphics"};
 my $z_version = Games::Rezrov::StoryFile::load(1);
 
+#Games::Rezrov::ZOptions::GUESS_TITLE(0) unless $zio->can_change_title();
+# always try to guess the title, for use w/"help" emulation
+
 1;
-cont() unless $zio->set_version(($z_version <= 3 ? 1 : 0),
+&cont() unless $zio->set_version(($z_version <= 3 ? 1 : 0),
 				\&cont);
 # Tk version invokes cont() itself, as a callback, since Tk's MainLoop blocks.
 # A better way???
@@ -255,7 +268,13 @@ sub cont () {
   #
   #  Start interpreter
   #
-  my $zi = new Games::Rezrov::ZInterpreter($zio);
+  if (0) {
+    print STDERR "DEBUG! using ZInterpreter2\n";
+    require Games::Rezrov::ZInterpreter2;
+    my $zi = new Games::Rezrov::ZInterpreter2($zio);
+  } else {
+    my $zi = new Games::Rezrov::ZInterpreter($zio);
+  }
 }
 
 sub tk_validate {
@@ -355,14 +374,73 @@ sub column_list {
     $longest = $len if $len > $longest;
   }
   $longest += 2;
-  my $columns = 75 / $longest;
-  my $format = ("%-" . $longest . "s") x $columns;
+  my $columns = int(75 / $longest);
+  my $format_one = "%-" . $longest . "s";
   my @results;
   my @list = @{$list};
   while (@list) {
+    my $count = @list < $columns ? @list : $columns;
+    my $format = $format_one x $count;
     push @results, sprintf $format, splice(@list,0,$columns);
   }
   return @results;
+}
+
+sub termcap_validate {
+  my ($val_type) = @_;
+
+  eval {
+    my $termios = new POSIX::Termios();
+    $termios->getattr();
+    my $ospeed = $termios->getospeed();
+    my $tc = Tgetent Term::Cap { TERM => undef, OSPEED => $ospeed };
+  
+    $tc->Trequire('ce');
+    # "ce" = clear to end of line
+  };
+
+  if ($@) {
+    # problem!
+    my $invalid_termcap = ($@ =~ /^Can\'t find a valid termcap file/);
+
+    my $mac_osx = $^O eq "darwin";
+    $ENV{TERM} = "xterm" if $mac_osx and $ENV{TERM} eq "vt100";
+    # HACK: under OS X, default TERM type seems to be "vt100" but this
+    # doesn't seem to work right if ESR's termcap file is installed.
+    # However, "xterm" seems to work fine!
+    # So, Think Different.  :P
+
+    if ($val_type == SPECIFIED) {
+      # user specifically asked for Termcap; explain problem
+      my $msg = "-termcap: sorry, ";
+      if ($invalid_termcap) {
+	$msg .= "you don't seem to have a termcap file installed!";
+      } else {
+	$msg .= sprintf "can't use termcap due to this error:\n%s", $@;
+      }
+      die $msg . "\n";
+    } elsif ($mac_osx and $invalid_termcap) {
+      # HACK: under OS X, /etc/termcap doesn't appear to be installed
+      # (as of fall 2003), but system perl comes with Term::Cap built in.
+      # Works fine if you:
+      #  1. Get a termcap file from http://catb.org/~esr/terminfo/
+      #     and install it in /etc
+      #  2. set your TERM to "xterm" rather than "vt100"
+      print "You appear to be running on a Mac which doesn't seem to\n";
+      print "have a termcap file installed.  Try downloading one from:\n";
+      print "\n";
+      print "  http://catb.org/~esr/terminfo/\n";
+      print "\n";
+      print "...and copying it to \"/etc/termcap\".\n";
+      print "Otherwise, I can only use the dumb (read \"ugly\") interface.\n";
+      
+      print "Press <RETURN> to continue...\n";
+      my $line = <STDIN>;
+    }
+    return 0;
+  } else {
+    return 1;
+  }
 }
 
 __END__
@@ -398,9 +476,12 @@ your system, but you can force the use of any of them manually.
 
 Designed to work on almost any perl installation.  Optionally uses
 Term::ReadKey and/or local system commands to guess the terminal size,
-clear the screen, and read the keyboard.  While there is no status
-line or multiple window support, this interface is perfectly adequate
-for playing most version 3 games.  Can be forced with "-dumb".
+clear the screen, and read the keyboard.  Optionally uses
+Term::ReadLine to provide line-editing history, assuming a backend
+readline module is available (e.g. Term::ReadLine::Perl).  While there
+is no status line or multiple window support, this interface is
+perfectly adequate for playing most version 3 games.  Can be forced
+with "-dumb".
 
 =head2 Termcap
 
@@ -668,6 +749,39 @@ This cheat should make the game a little more bearable to play.
 
 =item *
 
+B<vilify>: A silly cheat which tries to make the game think
+the object you specify is attackable.  Like "frotz" this is very
+game-specific; it only works in Zork I at present.
+Show that mailbox what for:
+
+   West of House
+   You are standing in an open field west of a white house,
+   with a boarded front door.
+   There is a small mailbox here.
+
+   >kill mailbox
+   (with the sword)
+   I've known strange people, but fighting a small mailbox?
+
+   >vilify mailbox
+   That small mailbox is really asking for trouble.
+
+   >kill mailbox
+   (with the sword)
+   Clang! Crash! The small mailbox parries.
+   Your sword has begun to glow very brightly.
+
+   >g
+   The quickness of your thrust knocks the small mailbox
+   back, stunned.
+
+=item *
+
+B<baste, nosh>: Another silly cheat which attempts to make the game think
+the specified object is edible.  Only works in Zork I for now.
+
+=item *
+
 B<lingo>: prints out all the words in the dictionary.
 
 =item *
@@ -877,10 +991,11 @@ is 60% of the screen's height.
 
 =head2 Term::ReadLine support
 
-If you have the Term::ReadLine module installed, support for it is
-available in the dumb, termcap, and curses interfaces.  By default
-support is enabled in the "dumb" module, and disabled in the termcap
-and curses interfaces (because it doesn't work right C<:P> ).  You can
+If you have the Term::ReadLine module installed (and a backend such as
+Term::Readline::Perl), support for it is available in the dumb,
+termcap, and curses interfaces.  By default support is enabled in the
+"dumb" module and "termcap" interfaces, and disabled in the curses
+interfaces (because it doesn't work right C<:P> ).  You can
 enable/disable support for it with the "-readline" flag: "-readline 1"
 enables support, and "-readline 0" disables it.
 
@@ -934,7 +1049,8 @@ hijacks the interpreter before your first command, submitting a
 "version" command and parsing the game's output.  This can slow the
 start of your game by a second or so, which is why you might want to
 turn it off.  This also currently causes problems with the Infocom
-Sampler (sampler1_R55.z3) and Beyond Zork.
+Sampler (sampler1_R55.z3) and Beyond Zork, for which title guessing
+is automatically disabled.
 
 =item B<-id>
 
@@ -1005,21 +1121,21 @@ B<Graham Nelson> for his amazing z-machine specification:
 B<Marnix Klooster> for "The Z-Machine, and How to Emulate It",
 a critical second point of view on the spec:
 
- ftp://ftp.gmd.de/if-archive/infocom/interpreters/specification/zmach06e.txt
+ http://www.ifarchive.org/if-archive/infocom/interpreters/specification/zmach06e.txt
 
 =item *
 
 B<Mark Howell> for his "zip" interpreter, whose source code made
 debugging all my stupid mistakes possible:
 
- ftp://ftp.gmd.de/if-archive/infocom/interpreters/zip
+ http://www.ifarchive.org/if-archive/infocom/interpreters/zip
 
 =item *
 
 B<Martin Frost> for his Quetzal universal save-game file format, which is
 implemented by rezrov:
 
- ftp://ftp.gmd.de/if-archive/infocom/interpreters/specification/savefile_14.txt
+ http://www.ifarchive.org/if-archive/infocom/interpreters/specification/savefile_14.txt
 
 =item *
 
@@ -1033,15 +1149,21 @@ the (nonexistent) object 0.
 
 =item *
 
-The folks at the B<IF-archive> for their repository:
-
- ftp://ftp.gmd.de/if-archive/README
+B<Amir Karger> for the mighty (and humbling) "Czech" suite of
+z-machine compliance tests.
 
 =item *
 
-B<William Seltzer> for Curses.pm, B<"sanders@bsdi.com"> for Term::Cap,
-B<Aldo Calpini> for Win32::Console, and of course B<Larry Wall> and
-the perl development team for Perl.
+The folks at the B<IF-archive> for their repository:
+
+ http://www.ifarchive.org/if-archive/README
+
+=item *
+
+B<Nick Ing-Simmons> for Tk.pm, B<William Seltzer> for Curses.pm,
+B<Tony Sanders> for Term::Cap, B<Aldo Calpini> for
+Win32::Console, and of course B<Larry Wall> and the perl development
+team for Perl.
 
 =item *
 
@@ -1072,7 +1194,7 @@ And lastly, the mighty Implementers:
 =head1 BUGS
 
    Bug? Not in a flawless program like this! (Cough, cough).
-                                      - Zork I
+                     - Zork I (revision 88, encoded at byte 29292)
 
 While I've tried, the interpreter is not fully compliant with the
 specification in some areas.  With that said, I currently know of no
@@ -1102,9 +1224,10 @@ Any suggestions to improve execution speed.
 
 =item *
 
-A saved game from Seastalker before the sonar scope is used.  This is
-(I think) the only example of a version 3 game splitting the screen,
-and I'd like to test it (I know it won't work correctly now).
+A saved game from Seastalker, from just before the sonar scope is
+used.  This is (I think) the only example of a version 3 game
+splitting the screen, and I'd like to test it.  I know for sure it
+won't work correctly now.
 
 =item *
 
@@ -1173,8 +1296,8 @@ description at the top of this document.
 
 =head1 AUTHOR
 
-Michael Edmonson E<lt>edmonson@poboxes.comE<gt>
+Michael Edmonson E<lt>edmonson@sdf.lonestar.orgE<gt>
 
-Rezrov homepage: http://www.voicenet.com/~mikeedmo/rezrov/
+Rezrov homepage: http://edmonson.paunix.org/rezrov/
 
 =cut
