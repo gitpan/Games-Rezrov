@@ -1,19 +1,31 @@
 package Games::Rezrov::ZIO_Generic;
 #
-# shared z-machine i/o
+# shared/skeleton z-machine i/o, options, and speech
 #
 use strict;
 
 use Games::Rezrov::ZIO_Tools;
 use Games::Rezrov::ZConst;
+use Games::Rezrov::Speech;
 use Games::Rezrov::MethodMaker qw(
 			   current_window
+                           zio_options
+                           using_term_readline
 			  );
+
+@Games::Rezrov::ZIO_Generic::ISA = qw(Games::Rezrov::Speech);
+# additional ZIO methods
 
 my $buffer = "";
 
 sub new {
-  return bless {}, $_[0];
+  my ($type, %options) = @_;
+  my $self = {};
+  bless $self, $type;
+  $self->zio_options(\%options);
+  $self->init_speech_synthesis() if $options{"speak"};
+  $self->init_speech_recognition() if $options{"listen"};
+  return $self;
 }
 
 sub can_split {
@@ -125,5 +137,53 @@ sub set_background_color {
   1;
 }
 
+sub readline_init {
+  #
+  # try to initialize Term::Readline if desired and available
+  #
+  # FIX ME: rather than ->{readline}, ZOptions.pm?
+  my ($self) = @_;
+  if ($self->zio_options->{readline} and find_module('Term::ReadLine')) {
+    require Term::ReadLine;
+    my $tr = new Term::ReadLine "what?", \*main::STDIN, \*main::STDOUT;
+    unless (ref $tr eq "Term::ReadLine::Stub") {
+      $tr->ornaments(0);
+      $self->using_term_readline($tr);
+      # only set if available and active
+    }
+  }
+}
+
+sub readline {
+  # read a line via Term::ReadLine
+  # readline insists on resetting the line so we need to give it
+  # everything up to the cursor position.
+  my ($self, $preloaded) = @_;
+  # FIX ME: preloaded input does NOT work with Term::ReadLine!
+
+  my $line;
+  {
+    local $SIG{__WARN__} = sub {};
+    # disable warnings for readline call.
+    # Term::ReadLine::Perl spews undef messages when passed an
+    # undef prompt (e.g. when "Plundered Hearts" starts)
+    my $rl_ref = $_[0]->using_term_readline();
+    my $prompt = Games::Rezrov::StoryFile::prompt_buffer();
+
+    if ($prompt and $rl_ref->ReadLine eq "Term::ReadLine::Gnu") {
+      # HACK:
+      # Term::ReadLine::Perl seems to erase line before prompt, 
+      # but Term::ReadLine::Gnu doesn't.  Since the prompt has already
+      # been displayed before ReadLine is called, when using Gnu
+      # version we need to erase it so we don't wind up with two.
+      $self->write_string(pack('c', Games::Rezrov::ZConst::ASCII_BS) x
+			  length($prompt));
+    }
+    
+    $line = $rl_ref->readline($prompt);
+    # this doesn't work with v5+ preloaded input
+  }
+  return $line;
+}
 
 1;

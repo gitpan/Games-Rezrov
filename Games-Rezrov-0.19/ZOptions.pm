@@ -19,6 +19,9 @@ my $HIGHLIGHT_OBJECTS = 0;
 my $GUESS_TITLE = 1;
 my $MAXIMUM_SCROLLING = 0;
 
+my $CORRECT_TYPOS = 1;
+# attempt to autocorrect typos a-la Nitfol
+
 my $EMULATE_NOTIFY = 1;
 # whether to emulate the "notify" score-notification command.
 # useful when playing games without a status line (ie ZIO_dumb.pm)
@@ -176,6 +179,10 @@ sub PLAYBACK_DIE {
 
 sub END_OF_SESSION_MESSAGE {
   return (defined $_[0] ? $END_OF_SESSION_MESSAGE = $_[0] : $END_OF_SESSION_MESSAGE);
+}
+
+sub CORRECT_TYPOS {
+  return (defined $_[0] ? $CORRECT_TYPOS = $_[0] : $CORRECT_TYPOS);
 }
 
 

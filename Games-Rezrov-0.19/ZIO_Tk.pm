@@ -50,7 +50,6 @@ use Games::Rezrov::MethodMaker qw(
 			   zfont
 			   last_text_id
 
-			   options
 			   variable_font_family
 			  );
 
@@ -62,9 +61,8 @@ my $initialized;
 
 sub new {
   my ($type, %options) = @_;
-  my $self = new Games::Rezrov::ZIO_Generic();
+  my $self = new Games::Rezrov::ZIO_Generic(%options);
   bless $self, $type;
-  $self->options(\%options);
   $self->font_cache({});
   $self->zfont(Games::Rezrov::ZConst::FONT_NORMAL);
   $abs_row=0;
@@ -90,7 +88,7 @@ sub set_version {
       $DEFAULT_FONT_SIZE = 18;
   }
 
-  my $options = $self->options();
+  my $options = $self->zio_options();
   my $vff = lc($options->{"family"} || $DEFAULT_VARIABLE_FAMILY);
   unless (grep {lc($_) eq $vff} $w_main->fontFamilies()) {
     $self->fatal_error(sprintf "Invalid font family \"%s\"; available families are:\n  %s\n", $vff, join "\n  ", column_list([sort $w_main->fontFamilies()]));
@@ -252,13 +250,13 @@ sub write_string {
       # 
       # 33(!):  76543210   34("):  76543210   35(#):  76543210
       #        0                  0                  0       #
-      #        1                  1                  1      # 
-      #        2  #               2    #             2     #  
-      #        3 ##               3    ##            3    #   
-      #        4#######           4#######           4   #    
-      #        5 ##               5    ##            5  #     
-      #        6  #               6    #             6 #      
-      #        7                  7                  7#       
+      #        1                  1                  1      #
+      #        2  #               2    #             2     #
+      #        3 ##               3    ##            3    #
+      #        4#######           4#######           4   #
+      #        5 ##               5    ##            5  #
+      #        6  #               6    #             6 #
+      #        7                  7                  7#
       my ($x1, $y1);
       my $x_mult = $self->fixed_font_width() / 7;
 #      my $y_mult = $self->line_height() / 8;
@@ -603,6 +601,15 @@ sub get_input {
   my ($self, $max, $single_char, %options) = @_;
   my $buffer = "";
   my $last_id;
+
+  if ($self->listening) {
+      $self->update();
+      $buffer = $self->recognize_line();
+      $self->write_string($buffer);
+      $self->newline();
+      return $buffer;
+  }
+
   if ($options{"-preloaded"}) {
     # preloaded text in the buffer, but already displayed by the game; ugh.
     #
@@ -837,8 +844,8 @@ sub blink_init {
   # alone for X milliseconds, then blink periodically
 
   unless ($cancel) {
-    my $blink_delay = exists $self->options()->{"blink"} ?
-      $self->options()->{"blink"} : DEFAULT_BLINK_DELAY;
+    my $blink_delay = exists $self->zio_options()->{"blink"} ?
+      $self->zio_options()->{"blink"} : DEFAULT_BLINK_DELAY;
     if ($blink_delay) {
       $self->blink_id($w_main->repeat($blink_delay, [ $self => 'cursor_blinker' ]));
     }

@@ -35,3 +35,4 @@ FontVectors.pm
 ZIO_Color.pm
 InlinedPrivateMethod.pm
 manual_install.pl
+Speech.pm

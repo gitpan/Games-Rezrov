@@ -150,7 +150,7 @@ $zero_ops[0x09] = "stack_pop";
 # 0x0a handled manually (quit)
 $zero_ops[0x0b] = "newline";
 $zero_ops[0x0c] = "display_status_line";
-$zero_ops[0x0d] = "verify";
+$zero_ops[0x0d] = "zo_verify";
 # 0x0e = first byte of extended opcode
 $zero_ops[0x0f] = "piracy";
 

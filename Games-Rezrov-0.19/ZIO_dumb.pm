@@ -1,9 +1,7 @@
 package Games::Rezrov::ZIO_dumb;
 # z-machine i/o for dumb/semi-dumb terminals.
 
-BEGIN {
-  $ENV{"PERL_RL"} = 'Perl';
-}
+# to do: get rid of absolute Y (untrackable)
 
 use strict;
 use Carp qw(cluck);
@@ -14,9 +12,6 @@ use Games::Rezrov::ZIO_Tools;
 use Games::Rezrov::ZIO_Generic;
 
 @Games::Rezrov::ZIO_dumb::ISA = qw(Games::Rezrov::ZIO_Generic);
-
-my $have_term_readline = 0;
-my $tr;
 
 my $have_term_readkey;
 my ($rows, $columns);
@@ -29,13 +24,19 @@ $|=1;
 
 sub new {
   my ($type, %options) = @_;
-  my $self = new Games::Rezrov::ZIO_Generic();
+  my $self = new Games::Rezrov::ZIO_Generic(%options);
   bless $self, $type;
-  $self->io_setup($options{"readline"});
+
+  $self->zio_options(\%options);
+  $self->readline_init();
+
+  $self->io_setup();
   
-  ($columns, $rows) = get_size();
   $columns = $options{columns} if $options{columns};
   $rows = $options{rows} if $options{rows};
+  ($columns, $rows) = get_size() unless $columns and $rows;
+  # don't attempt to detect terminal size if manually set;
+  # ("make test" crashes in Term::ReadKey if not run on a tty!)
   
   unless ($columns and $rows) {
     print "I couldn't guess the number of rows and columns in your display,\n";
@@ -46,7 +47,7 @@ sub new {
 }
 
 sub io_setup {
-  my ($self, $readline_ok) = @_;
+  my ($self) = @_;
 
   if (find_module('Term::ReadKey')) {
     require Term::ReadKey;
@@ -56,18 +57,6 @@ sub io_setup {
     # disable echoing
 #    ReadLine(-1);
     # make sure we don't buffer any (invisible) characters
-  }
-
-  if ($readline_ok and find_module('Term::ReadLine')) {
-    require Term::ReadLine;
-    $tr = new Term::ReadLine 'what?', \*main::STDIN, \*main::STDOUT;
-
-    if (ref $tr eq "Term::ReadLine::Stub") {
-      # no real underlying ReadLine package active, so don't use it
-    } else {
-      $have_term_readline = 1;
-      $tr->ornaments(0);
-    }
   }
 
   $clear_prog = find_prog("clear");
@@ -96,6 +85,7 @@ sub update {
 }
 
 sub find_prog {
+  # don't look
   foreach ("/bin/", "/usr/bin/") {
     my $fn = $_ . $_[0];
     return $fn if -x $fn;
@@ -165,14 +155,16 @@ sub get_input {
 #      ReadLine(0);
     }
     my $line;
-    if ($have_term_readline) {
-      # readline insists on resetting the line so we need to give it
-      # everything up to the cursor position.
-      $line = $tr->readline(Games::Rezrov::StoryFile::prompt_buffer());
-      # this doesn't work with v5+ preloaded input
+    if ($self->listening) {
+      # speech recognition
+      $line = $self->recognize_line();
+      print "$line\n";
+    } elsif ($self->using_term_readline()) {
+      # Term::ReadLine enabled
+      $line = $self->readline($options{"-preloaded"});
     } else {
       $line = <STDIN>;
-      # this doesn't work with v5+ preloaded input
+      # also doesn't work with v5+ preloaded input
     }
     unless (defined $line) {
       $line = "";

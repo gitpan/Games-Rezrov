@@ -6,7 +6,7 @@ use strict;
 use Carp qw(cluck confess);
 
 BEGIN {
-  $ENV{"PERL_RL"} = 'Perl';
+#  $ENV{"PERL_RL"} = 'Perl';
 }
 
 @Games::Rezrov::ZIO_Curses::ISA = qw(
@@ -25,7 +25,6 @@ use Games::Rezrov::MethodMaker qw(
 				  need_endwin
 				  rows
 				  columns
-				  term_readline
 				  color_pairs
 				  zfont
 				 );
@@ -44,9 +43,13 @@ my $color_pair_counter = 0;
 
 sub new {
   my ($type, %options) = @_;
-  my $self = new Games::Rezrov::ZIO_Generic();
+  my $self = new Games::Rezrov::ZIO_Generic(%options);
 #  my $self = [];
   bless $self, $type;
+
+  $self->zio_options(\%options);
+  $self->readline_init();
+  # danger! danger!
 
   # set up Curses:
   initscr() || die;
@@ -55,11 +58,6 @@ sub new {
   # isendwin() is not present in all Curses implementations (eg dec_osf)
   # ...actually it's more like Curses.pm doesn't autoconfigure correctly
   # under dec_osf  :(
-
-  if ($options{"readline"} and find_module('Term::ReadLine')) {
-    my $tr = $self->term_readline(new Term::ReadLine 'what?', \*main::STDIN, \*main::STDOUT);
-    $tr->ornaments(0);
-  }
 
   my $columns = $options{"columns"} || $Curses::COLS || die "need columns!";
   my $rows = $options{"rows"} || $Curses::LINES || die "need rows!";
@@ -227,9 +225,9 @@ sub get_input {
     # temporarily disable autoscrolling; some Curses seem to generate
     # a newline/scroll with user input (ie DEC OSF)
     
-    if ($self->term_readline()) {
-      $result = $self->term_readline()->readline(Games::Rezrov::StoryFile::prompt_buffer());
-      # this doesn't work with v5+ preloaded input
+    if ($self->using_term_readline()) {
+      $result = $self->readline($options{"-preloaded"});
+      # doesn't work, period!
     } else {
 #      $w_main->getnstr($result, $max);
       # this doesn't work with v5+ preloaded input

@@ -130,6 +130,8 @@ my $current_frame;
 
 my $lines_read = 0;
 
+my $TYPO_NOTIFY;
+
 my %Z_TRANSLATIONS = (
 		       0x18 => "UP",
 		       0x19 => "DOWN",
@@ -597,7 +599,7 @@ sub set_variable {
 		   abs($diff), $score);
 	newline();
 	if ($last_score == 0) {
-	  write_text("[NOTE: you can turn score notification on or off at any time with the NOTIFY command.]");
+	  write_text("[NOTE: you can toggle score notification on or off at any time with the NOTIFY command.]");
 	  newline();
 	}
       }
@@ -666,8 +668,9 @@ sub z_not {
     store_result(~$_[0]);
 }
 
-sub verify {
-  # verify game image
+sub zo_verify {
+  # verify game image.
+  # in most Infocom games this seems to be either "$ve" or "$verif".
   # sect15.html#verify
   my $stat = $header->static_memory_address();
   my $flen = $header->file_length();
@@ -732,7 +735,7 @@ sub set_global_var {
 		 abs($diff), $score);
       newline();
       if ($last_score == 0) {
-	write_text("[NOTE: you can turn score notification on or off at any time with the NOTIFY command.]");
+	write_text("[NOTE: you can toggle score notification on or off at any time with the NOTIFY command.]");
 	newline();
       }
     }
@@ -1703,16 +1706,37 @@ sub read_line {
 	my $initial = get_byte_at($text_address + 1);
 	$initial_buf = get_string_at($text_address + 2, $initial) if $initial;
       }
+
+      my $sz = screen_zio();
       
-      $s = screen_zio()->get_input($max_text_length, 0,
-					"-time" => $time,
-					"-routine" => $routine,
-					"-zi" => $interpreter,
-					"-preloaded" => $initial_buf,
-					);
+      $s = $sz->get_input($max_text_length, 0,
+			  "-time" => $time,
+			  "-routine" => $routine,
+			  "-zi" => $interpreter,
+			  "-preloaded" => $initial_buf,
+			 );
+
+      if ($s and $sz->speaking and $s !~ /^\#speak/) {
+	  $sz->speak($s, "-gender" => 2);
+	  # say command unless we intend to turn off speech
+      }
     }
   }
 #  printf STDERR "cmd: $s\n";
+
+  if (Games::Rezrov::ZOptions::CORRECT_TYPOS()) {
+    my $msg;
+    ($s, $msg) = $zdict->correct_typos($s);
+    if ($msg) {
+      write_text($msg);
+      newline();
+      unless ($TYPO_NOTIFY) {
+	write_text("[NOTE: you can toggle typo correction on or off at any time with the #TYPO command.]");
+	newline();
+	$TYPO_NOTIFY=1;
+      }
+    }
+  }
 
   if (Games::Rezrov::ZOptions::EMULATE_UNDO()) {
     if ($s eq "undo") {
@@ -1777,7 +1801,8 @@ sub read_line {
   } else {
     $zdict->tokenize_line($text_address,
 			  $token_address,
-			  "-len" => length($s));
+			  "-len" => length($s),
+			  );
   }
 
 #  $zdict->last_buffer($s);
@@ -2500,6 +2525,10 @@ sub flush {
 #  print "fs\n";
   $flushing = 1;
   $wrote_something = 1;
+
+  my $speech_buffer = $buffer;
+  # save unmodified version for speech interface
+
   if (Games::Rezrov::ZOptions::BEAUTIFY_LOCATIONS() and
       $version < 4 and
       likely_location(\$buffer)) {
@@ -2597,6 +2626,9 @@ sub flush {
     $prompt_buffer = $buffer;
     # FIX ME
   }
+
+  $zio->speak($speech_buffer) if $zio->speaking;
+  
   $flushing = 0;
 }
   
@@ -2708,7 +2740,8 @@ sub tokenize {
 
   $zd->tokenize_line($text,
 		     $parse,
-		     "-flag" => $flag);
+		     "-flag" => $flag,
+		     );
 #  die join ",", @_;
 }
 
@@ -2956,6 +2989,10 @@ sub not_or_possibly_call {
 sub font_3_disabled {
   $font_3_disabled = $_[0] if defined($_[0]);
   return $font_3_disabled;
+}
+
+sub get_zdict {
+    return $zdict;
 }
 
 1;

@@ -20,7 +20,8 @@ die sprintf 'File "%s" does not exist.' . "\n", $storyfile
 
 my $zio = new Games::Rezrov::ZIO_dumb(
 				      "columns" => 80, "rows" => 25
-# HACK: dumb interface will die if it can't detect size (win32)
+# HACK: dumb interface will die if it can't detect size
+# (under win32, or in a CPAN tester's tty-less cron job)
 				      );
 
 Games::Rezrov::ZOptions::GUESS_TITLE(0) unless $zio->can_change_title();

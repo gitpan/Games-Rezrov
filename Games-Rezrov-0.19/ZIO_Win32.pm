@@ -63,7 +63,7 @@ foreach (qw(black
 
 sub new {
     my ($type, %options) = @_;
-    my $self = new Games::Rezrov::ZIO_Generic();
+    my $self = new Games::Rezrov::ZIO_Generic(%options);
     bless $self, $type;
 
     if ($options{fg}) {
@@ -175,45 +175,51 @@ sub get_input {
     # preloaded text in the buffer, but already displayed by the game; ugh.
     my @event;
     my ($code, $char);
-    while (1) {
+
+    if ($self->listening) {
+      $buf = $self->recognize_line();
+      $OUT->Write($buf);
+    } else {
+      while (1) {
 	@event = $IN->Input();
 	next unless defined $event[0];
 	my $known;
 	if ($event[0] == 1 and $event[1]) {
-	    # a key pressed
-	    $code = $event[5];
-	    if ($code == 0) {
-		# non-character key pressed
-		if ($KEYCODES{$event[3]}) {
-		    $code = $KEYCODES{$event[3]};
-		    $known = 1;
-		} else {
-		    log_it(sprintf "got unknown non-char: %s", join ",", @event);
-		}
-	    }
-
-	    if ($single_char and ($known or ($code >= 1 and $code <= 127))) {
-		return chr($code);
-	    } elsif ($code == Games::Rezrov::ZConst::ASCII_BS) {
-		if (length($buf) > 0) {
-#	  log_it("backsp " . length($buf) . " " . $buf);
-		    my ($x, $y) = $OUT->Cursor();
-		    $OUT->Cursor($x - 1, $y);
-		    $OUT->Write(" ");
-		    $OUT->Cursor($x - 1, $y);
-		    $buf = substr($buf, 0, length($buf) - 1);
-		}
-	    } elsif ($code == Games::Rezrov::ZConst::ASCII_CR) {
-		last;
+	  # a key pressed
+	  $code = $event[5];
+	  if ($code == 0) {
+	    # non-character key pressed
+	    if ($KEYCODES{$event[3]}) {
+	      $code = $KEYCODES{$event[3]};
+	      $known = 1;
 	    } else {
-		if ($code >= 32 and $code <= 127) {
-		    $char = chr($code);
-		    $buf .= $char;
-		    $OUT->Attr($self->get_attr(0));
-		    $OUT->Write($char);
-		}
+	      log_it(sprintf "got unknown non-char: %s", join ",", @event);
 	    }
+	  }
+
+	  if ($single_char and ($known or ($code >= 1 and $code <= 127))) {
+	    return chr($code);
+	  } elsif ($code == Games::Rezrov::ZConst::ASCII_BS) {
+	    if (length($buf) > 0) {
+	      #	  log_it("backsp " . length($buf) . " " . $buf);
+	      my ($x, $y) = $OUT->Cursor();
+	      $OUT->Cursor($x - 1, $y);
+	      $OUT->Write(" ");
+	      $OUT->Cursor($x - 1, $y);
+	      $buf = substr($buf, 0, length($buf) - 1);
+	    }
+	  } elsif ($code == Games::Rezrov::ZConst::ASCII_CR) {
+	    last;
+	  } else {
+	    if ($code >= 32 and $code <= 127) {
+	      $char = chr($code);
+	      $buf .= $char;
+	      $OUT->Attr($self->get_attr(0));
+	      $OUT->Write($char);
+	    }
+	  }
 	}
+      }
     }
     $self->newline();
     return $buf;

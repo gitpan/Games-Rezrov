@@ -25,7 +25,8 @@ use Games::Rezrov::MethodMaker ([],
 			    decoded_by_address
 			    object_cache
 			    last_random
-                            tried_help
+ 
+                            dictionary_fully_decoded
 			   ));
 
 use constant OMAP_START_INDENT => 1;
@@ -172,6 +173,15 @@ use constant WWW_HELP_MESSAGES => (
     "I can barely see what's going on there, but I'll see what I can do...",
     "Perhaps your plea will be heard."
 );
+
+use constant SPEECH_ENABLED_MESSAGES => (
+					 "Speech output enabled.",
+					 "Hello.",
+					 "Hello there.",
+#					 "Bitchin' Betty activated.",
+					 "Altitude! Altitude!",
+					 "Dough Re Mi Fa So La Ti Dough..."
+					);
 
 %Games::Rezrov::ZDict::MAGIC_WORDS = map {$_ => 1} (
 						    "pilfer",
@@ -399,8 +409,57 @@ sub tokenize_line {
 	if length($token) > $encoded_length;
       my $addr = $self->get_dictionary_address($token);
       if ($addr == 0) {
+	# NOP if in dictionary
 	if (Games::Rezrov::ZOptions::EMULATE_NOTIFY() and $token eq "notify") {
 	  $self->notify_toggle();
+	} elsif (lc($token) eq "#speak") {
+	  # toggle speech output
+	  my $zio = Games::Rezrov::StoryFile::screen_zio();
+	  # horrible
+	  my $msg;
+	  if ($zio->speaking()) {
+	    $msg = "Speech output disabled.";
+	    $zio->speaking(0);
+	  } else {
+	    if ($zio->init_speech_synthesis()) {
+	      # ok
+	      $msg = $self->random_message(SPEECH_ENABLED_MESSAGES);
+	    } else {
+	      $msg = $zio->speech_synthesis_error();
+	    }
+	  }
+	  $self->write_text($msg);
+	  newline();
+	  newline();
+	  suppress_output();
+	} elsif (lc($untrunc_token) eq "#listen") {
+	  # toggle speech recognition
+	  my $zio = Games::Rezrov::StoryFile::screen_zio();
+	  # horrible
+	  my $msg;
+	  if ($zio->listening()) {
+	    $msg = "Speech recognition disabled.";
+	    $zio->speaking(0);
+	  } else {
+	    if ($zio->init_speech_recognition()) {
+	      # ok
+	      $msg = "Speech recognition enabled.";
+	    } else {
+	      $msg = $zio->speech_recognition_error();
+	    }
+	  }
+	  $self->write_text($msg);
+	  newline();
+	  newline();
+	  suppress_output();
+
+	} elsif (lc($token) eq "#typo") {
+	  my $status = !Games::Rezrov::ZOptions::CORRECT_TYPOS();
+	  $self->write_text(sprintf "Typo correction is now %s.", $status ? "on" : "off");
+	  Games::Rezrov::ZOptions::CORRECT_TYPOS($status);
+	  $self->newline();
+	  $self->newline();
+	  $self->suppress_output();
 	} elsif (Games::Rezrov::ZOptions::EMULATE_HELP() and $token eq "help") {
 	  $self->help();
 	} elsif (Games::Rezrov::ZOptions::EMULATE_OOPS() and ($oops_word or
@@ -820,15 +879,16 @@ sub get_object_cache {
 sub random_message {
   my ($self, @messages) = @_;
   my $index;
-  my $last_index = $self->last_random();
+  my $last_hash = $self->last_random() || $self->last_random({});
+  my $last_stamp = $last_hash->{$messages[0]};
   while (1) {
     $index = int(rand(scalar @messages));
     last if (@messages == 1 or 
-	     !defined($last_index) or
-	     $index != $last_index);
-    # don't use the same index twice in a row
+	     !defined($last_stamp) or
+	     $index ne $last_stamp);
+    # don't use the same index twice in a row for a given set of messages
   }
-  $self->last_random($index);
+  $last_hash->{$messages[0]} = $index;
   return $messages[$index];
 }
 
@@ -842,24 +902,39 @@ sub nice_list {
   }
 }
 
-sub dump_dictionary {
-  my ($self, $what) = @_;
-  my $dict_start = $self->dictionary_word_start();
-  my $ztext = $self->ztext();
-  my $num_words = $self->entry_count();
-  my $entry_length = $self->entry_length();
-  my $by_name = $self->decoded_by_word();
-  my $by_address = $self->decoded_by_address();
-  my $address;
+sub decode_dictionary {
+  # decode entire dictionary
+  my ($self) = @_;
 
-  for (my $index = 0; $index < $num_words; $index++) {
-    $address = $dict_start + ($index * $entry_length);
-    unless (exists $by_address->{$address}) {
-      my $word = $ztext->decode_text($address);
-      $by_name->{$$word} = $address;
-      $by_address->{$address} = $$word;
+  unless ($self->dictionary_fully_decoded()) {
+    my $dict_start = $self->dictionary_word_start();
+    my $ztext = $self->ztext();
+    my $num_words = $self->entry_count();
+    my $entry_length = $self->entry_length();
+    my $by_name = $self->decoded_by_word();
+    my $by_address = $self->decoded_by_address();
+    my $address;
+
+    for (my $index = 0; $index < $num_words; $index++) {
+      $address = $dict_start + ($index * $entry_length);
+      unless (exists $by_address->{$address}) {
+	my $word = $ztext->decode_text($address);
+	$by_name->{$$word} = $address;
+	$by_address->{$address} = $$word;
+      }
     }
   }
+
+  $self->dictionary_fully_decoded(1);
+  
+}
+
+sub dump_dictionary {
+  my ($self, $what) = @_;
+  $self->decode_dictionary();
+  my $by_name = $self->decoded_by_word();
+  my $by_address = $self->decoded_by_address();
+
   my $rows = Games::Rezrov::StoryFile::rows();
   my $columns = Games::Rezrov::StoryFile::columns();
   my $len = $self->encoded_word_length();
@@ -1301,16 +1376,92 @@ sub call_web_browser {
   my ($self, $url) = @_;
   
   if ($^O eq "MSWin32") {
-    if ($self->tried_help) {
-      $self->write_text("I fear another attempt to contact the Implementers will bring only their wrath instead.");
-      # for real: app seems to hang if we try this again without
-      # first closing the web browser.  How to detect this?
-    } else {
-      $self->write_text($self->random_message(WWW_HELP_MESSAGES));
-      system "start $url";
-      $self->tried_help(1);
-      # easy!
+    $self->write_text($self->random_message(WWW_HELP_MESSAGES));
+
+#      system "start $url";
+    # "start" seems to be trouble: app seems to hang if we run it 
+    # more than once without first closing the invoked web browser.
+
+    my $cmd;
+    
+    #
+    # find user's default browser
+    #
+    require Win32::TieRegistry;
+    $SIG{"__WARN__"} = sub {};
+    # Win32::TieRegistry can spew warnings
+
+    my $key = new Win32::TieRegistry(
+				     'Classes\\.htm',
+				    );
+    # find class name for .htm file association
+
+    if ($key) {
+      my $class = ($key->GetValue(''))[0];
+      if ($class) {
+	# find invocation
+	#
+	# IE:
+	# "C:\Program Files\Internet Explorer\iexplore.exe" -nohome
+	#
+	# Firefox: 
+	# C:\PROGRA~1\MOZILL~2\FIREFOX.EXE -url "%1"
+	#
+	my $ckey = 'Classes\\' . $class . '\\shell\\open\\command';
+	$key = new Win32::TieRegistry($ckey);
+	if ($key) {
+	  ($cmd) = $key->GetValue('');
+	  if ($cmd =~ /%1/) {
+	    # placeholder for url (Phoenix|(Fire(bird|fox)))
+	    $cmd =~ s/\%1/$url/;
+	  } else {
+	    # raw (IE), just append
+	    $cmd .= " " . $url;
+	  }
+	}
+      }
     }
+    
+    my $exec_error = 0;
+    if ($cmd) {
+      require Win32::Process;
+      import Win32::Process;
+
+      my ($exe_name, $cmd_line);
+
+      if ($cmd =~ /^([\"\'])/) {
+	# exe name is quoted (e.g. IE); need to unquote before executing
+	my $regexp = '^' . $1 . '([^\\' . $1 . ']+)' . $1 . '\s*(.*)';
+	$cmd =~ /$regexp/ || die;
+	($exe_name, $cmd_line) = ($1, $2);
+      } else {
+	# unquoted executable (e.g. firefox)
+	$cmd =~ /^(\S+)\s*(.*)/;
+	($exe_name, $cmd_line) = ($1, $2);
+      }
+
+      my $pobj;
+      unless (
+	  Win32::Process::Create($pobj,
+			     $exe_name,
+			     $cmd_line,
+			     0,
+			     NORMAL_PRIORITY_CLASS(),
+			     ".")
+	     ) {
+	$self->newline();
+	my $error = Win32::FormatMessage(Win32::GetLastError());
+	$error =~ s/\s+$//;
+	$self->write_text(sprintf 'You quake in your boots as a booming voice intones: "%s"', $error);
+	$exec_error = 1;
+      }
+    }
+
+    if (not($cmd) or $exec_error) {
+      # whatever
+      system "explorer $url";
+    }
+
   } else {
     # any good platform-independent way of doing this??
     # total hack based on Linux environment
@@ -1892,5 +2043,150 @@ sub baste {
   }
 }
 
+sub correct_typos {
+  # attempt to correct typos as Nitfol interpreter does:
+  #
+  # If the entered word is in the dictionary, behave as normal.
+  #
+  # If the length of the word is less than 3 letters long, give up. We
+  # don't want to make assumptions about what so short words might be.
+  #
+  # If the word is the same as a dictionary word with one transposition,
+  # assume it is that word. exmaine becomes examine.
+  #
+  # If it is a dictionary word with one deleted letter, assume it is
+  # that word. botle becomes bottle.
+  #
+  # If it is a dictionary word with one inserted letter, assume it is
+  # that word. tastey becomes tasty.
+  #
+  # If it is a dictionary word with one substitution, assume it is that
+  # word. opin becomes open.
+  #
+  # *** FIX ME: ***
+  #  - what to do when corrected word is truncated?
+  #    i.e. "mailbax" should be corrected to "mailbox", but token is "mailbo"
+  #  - deletion with irrelevant last token letter:
+  #    "malbox" should be "mailbo"
+
+  my ($self, $line) = @_;
+  my $raw_line = $line;
+
+  my $new_line;
+
+  chomp $line;
+  my @words = split /\s+/, $line;
+  # HACK: doesn't follow the tokenization rules in tokenize_line().
+  # Direct queries to my associate, Dr. Sosumi.
+
+  my @new_words;
+
+  $self->decode_dictionary();
+  my $words = $self->decoded_by_word();
+  my $encoded_length = $self->encoded_word_length();
+  my @all_words = keys %{$words};
+
+  my $token;
+  my $i;
+  my $word;
+  my @subs;
+
+  foreach $word (@words) {
+    $token = lc($word);
+    $token = substr($token,0,$encoded_length)
+      if length($token) > $encoded_length;
+    my $tlen = length($token);
+    my $new_word;
+    if (length($word) < 3) {
+      # too short
+      push @new_words, $word;
+    } elsif (exists $words->{$token}) {
+      # OK
+      push @new_words, $word;
+    } else {
+      my (@sub_hits, @trans_hits, @del_hits, @ins_hits);
+
+      #
+      # single-character insertion
+      #
+      for ($i=0; $i < $tlen; $i++) {
+	my $try = "";
+	for (my $j=0; $j < $tlen; $j++) {
+	  $try .= substr($token, $j, 1) unless $j == $i;
+	}
+#	print "$token $try\n";
+	push @ins_hits, $try if exists $words->{$try};
+      }
+
+      #
+      # single-character deletion
+      #
+      for ($i=1; $i < $tlen; $i++) {
+	my $regexp = substr($token, 0, $i) . "." . substr($token, $i);
+	$regexp = substr($regexp, 0, $encoded_length) if length($regexp) > $encoded_length;
+	# i.e. in zork I, "malbox" search for "ma.lbox" must
+	# search dictionary for "ma.lbo" (only 6 characters)
+
+#	my @h = grep {/$regexp/} @all_words;
+	my @h = grep {/^$regexp$/} @all_words;
+#	printf "%s: %s\n", $regexp, join ",", @h;
+
+	push @del_hits, @h if @h;
+      }
+
+      #
+      #  single-character transpositions
+      #
+      for ($i=0; $i < $tlen - 1; $i++) {
+	my $try = $token;
+	my $save = substr($try, $i, 1);
+	substr($try,$i,1) = substr($token,$i + 1,1);
+	substr($try,$i+1,1) = $save;
+	push @trans_hits, $try if exists $words->{$try};
+      }
+
+      #
+      #  single-character substitutions
+      #
+      for ($i=0; $i < $tlen; $i++) {
+	my $regexp = $token;
+	substr($regexp, $i, 1) = '.';
+	my @hits = grep {/^$regexp$/} @all_words;
+	push @sub_hits, @hits if @hits;
+      }
+
+      $new_word = $word;
+      foreach (\@trans_hits, \@del_hits, \@ins_hits, \@sub_hits) {
+	$new_word = $_->[0], last if @{$_};
+      }
+
+      push @new_words, $new_word;
+
+      if ($word ne $new_word) {
+	push @subs, [ $word, $new_word ];
+      }
+    }
+  }
+
+  my $msg = "";
+  if (@subs) {
+    $new_line = join " ", @new_words;
+    $msg = '[Assuming you meant ';
+    for ($i=0; $i < @subs; $i++) {
+      if ($i > 0) {
+	$msg .= ', ';
+	$msg .= 'and ' if $i == $#subs;
+      }
+      $msg .= sprintf '"%s" instead of "%s"', $subs[$i]->[1], $subs[$i]->[0];
+    }
+    $msg .= '.]';
+  } else {
+    # if nothing done, return untouched line just in case
+    # something important about tokenization, etc.
+    $new_line = $raw_line;
+  }
+
+  return ($new_line, $msg);
+}
 
 1;

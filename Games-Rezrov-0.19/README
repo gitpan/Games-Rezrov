@@ -22,6 +22,28 @@ COPYRIGHT
 
 REVISION HISTORY
 
+ 0.19  Sat Mar  6 15:30:00 EST 2004
+        - Optional speech synthesis ("-speak") and recognition ("-listen").
+          This only works under win32 at the moment, using the optional
+          Win32::SAPI4 module.  For more details see the full rezrov
+          POD documentation.
+        - termcap interface improvements: all lines on screen should 
+          be available now if terminal has "cs" capability
+        - optional typo correction, a-la Evin Robertson's
+          Nitfol interpreter. Enabled by default; toggle with 
+          "#typo", or "-typo 0" on the command line.
+        - Term::ReadLine usage cleanups:
+            - Term::ReadLine::Perl seems to erase the line before prompting,
+              while Term::ReadLine::Gnu doesn't.  Since the prompt has 
+              been printed by the game before readline is invoked, if using
+              Gnu version, attempt to erase it so we don't wind up seeing
+              two prompts.
+            - centralize readline access between termcap/dumb interfaces
+        - test.pl: should always work, no really (even if not running 
+          on a tty; CPAN testers, I'm looking in your direction)
+        - improved "help" handling under win32
+        - manual_install.pl: "-u" switch to uninstall.
+
  0.18  Wed Feb  4 22:31:08 EST 2004
         - cleanup/bugfix release
         - various fixes to pass Amir Karger's "czech" test suite (ver. 0.8)
@@ -129,7 +151,7 @@ REVISION HISTORY
           command-transcript commands
 
  0.10  Sun Oct 18 20:07:19 EDT 1998
-	- first public release
+        - first public release
 
 PREREQUISITES
 
