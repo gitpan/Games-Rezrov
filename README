@@ -1,0 +1,116 @@
+rezrov - an Infocom game interpreter
+
+DESCRIPTION
+
+ Rezrov is an implementation of a z-machine written in pure perl.  In 
+ other words, it's a program that can play Infocom games, such as Zork.
+ Full documentation, in POD format, can be found embedded in the file
+ "rezrov".
+
+ See http://www.voicenet.com/~mikeedmo/rezrov/ for online documentation,
+ screenshots, etc.
+
+COPYRIGHT
+
+ Copyright (c) 1998, 1999 Michael Edmonson <edmonson@poboxes.com>.  All
+ rights reserved.  This program is free software; you can redistribute
+ it and/or modify it under the same terms as Perl itself.
+
+REVISION HISTORY
+
+ 0.15  Sun Jan 24 17:41:39 EST 1999
+        - Optimizations:
+           - some memory-access and variable casting functions
+             inlined using regexp/eval hack (blech).
+           - hand-inline opcode loading
+           - cache object properties
+           - overall seems to run between 15-25% faster.
+        - packages renamed from Rezrov:: to Games::Rezrov (for CPAN)
+        - new cheat commands:
+            "travis": attempts to fool the game into thinking the item 
+                      you specify is a weapon.  Zork I only for now;
+                      slay the troll with your mighty leaflet.
+              "tail": automatically follow a character in a game as they 
+                      move from room to room
+
+ 0.14  Sun Jan 10 20:35:53 EST 1999
+        - new cheat verb: "frotz" (only for some games).
+          Frotz, from the spell in "Enchanter", turns any item
+          into a light source, obviating the need for fuel/batteries.
+          See the documentation for full details.
+        - If you specify an item name for "teleport", it will take you
+          to the room containing the item
+        - now passes all "strictz.z5" object 0 torture tests
+        - the usual little tweaks and fixes
+
+ 0.13  Sun Jan  3 22:15:46 EST 1999
+        - fixed color support (Tk, Curses, Win32 console)
+        - cheat commands:
+             - new commands: "rooms" and "items"
+             - "teleport" shows description of new room
+             - "pilfer" attempts to move pilfered item into inventory
+             - "omap" object dump more reliable
+        - more etude.z5 z-machine torture tests passed
+        - more code reorganization/thrashing
+
+ 0.12  Tue Dec  1 21:16:26 EST 1998
+        - added Tk interface (works under both X and win32)
+        - i/o layer reorganized
+        - many little glitches fixed
+
+ 0.11  Sat Oct 24 20:27:08 EDT 1998
+        - about 10-15% faster:
+            - cache game objects
+            - streamline handling of decoded text
+            - convert to blessed arrays instead of hashes
+            - A few more critical globals :(
+        - slightly improved v5 compatibility
+        - emulation of the "#reco", "#unre" and "#comm"
+          command-transcript commands
+
+ 0.10  Sun Oct 18 20:07:19 EDT 1998
+	- first public release
+
+PREREQUISITES
+
+ Rezrov is written in pure perl, no extension compilation is required.
+
+ Perl version 5.004 or later is required.
+
+ Optionally supported but not required:
+    Tk (version 800.*)
+    Curses
+    Term::Cap
+    Win32::Console
+    Term::ReadLine
+
+HOW TO BUILD AND INSTALL
+
+ perl Makefile.PL
+ make
+ make test
+ make install
+
+ After installation, run rezrov on a z-code file, such as the
+ provided minizork.z3: "rezrov minizork.z3".
+
+MANUAL INSTALLATION INSTRUCTIONS
+
+ If you are using a binary distribution of perl the "generic" instructions
+ above will most likely fail.  The following are instructions on how
+ to install rezrov by hand.
+
+ Rezrov consists of two basic pieces: a set of packages (*.pm files),
+ and a script called "rezrov".  The *.pm files need to be installed
+ in a subdirectory called "Games/Rezrov" somewhere in Perl's module search
+ path (@INC).  "rezrov" is the main wrapper program that requires these
+ modules to run; it can go anywhere you like.
+
+ For example, on a Windows 95/98/etc machine, using the perl5.004_02
+ "bindist" distribution installed in C:\PERL, you would need to:
+
+ 1. mkdir C:\perl\lib\site\Games
+ 2. mkdir C:\perl\lib\site\Games\Rezrov
+ 3. copy *.pm c:\perl\lib\site\Games\Rezrov
+ 4. perl rezrov minizork.z3
+
