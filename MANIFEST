@@ -30,3 +30,6 @@ rezrov
 minizork.z3
 ZObjectStatus.pm
 Inliner.pm
+FontVectors.pm
+ZIO_Color.pm
+InlinedPrivateMethod.pm

@@ -4,8 +4,9 @@ DESCRIPTION
 
  Rezrov is an implementation of a z-machine written in pure perl.  In 
  other words, it's a program that can play Infocom games, such as Zork.
- Full documentation, in POD format, can be found embedded in the file
- "rezrov".
+ Its chief distinguishing feature from other z-code interpreters is a wide 
+ array of cheat commands.  Full documentation, in POD format, can be 
+ found embedded in the file "rezrov".
 
  See http://www.voicenet.com/~mikeedmo/rezrov/ for online documentation,
  screenshots, etc.
@@ -17,6 +18,28 @@ COPYRIGHT
  it and/or modify it under the same terms as Perl itself.
 
 REVISION HISTORY
+
+ 0.17  Sun Jun 13 16:18:49 EDT 1999
+        - new cheat commands:
+            - "lummox": remove restrictions on number and weight of
+               items that may be carried
+            - "systolic": lower blood pressure ("Bureaucracy" only)
+        - optimizations:
+            - many simple methods inlined via more regexp/eval munging
+              (see InlinedPrivateMethod.pm)
+            - tweak opcode/operand loading
+            - runs between 7-10% faster.
+        - interface fixes:
+            - Tk:
+                - arrow keys now work in Beyond Zork
+                - Bureaucracy scrolling pause now works correctly
+                - code is less hideous
+            - Curses: backspace more reliable
+            - Termcap: screen attributes reset correctly
+            - Win32::Console: buffer keypresses
+        - "-24h" flag, show time games in 24-hour time rather than AM/PM
+        - "teleport" to character locations in Suspect now works.
+        - various miscellaneous fixes
 
  0.16  Sun Mar  7 20:50:43 EST 1999
         - more optimizations:

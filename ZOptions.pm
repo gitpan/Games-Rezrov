@@ -62,6 +62,9 @@ my $SHAMELESS = 1;
 my $EMULATE_HELP = 1;
 # pay attention to the "help" command
 
+my $TIME_24 = 0;
+# in "time games", show time in 24-hour format rather than AM/PM
+
 1;
 
 sub notifying {
@@ -156,4 +159,9 @@ sub SHAMELESS {
 sub EMULATE_HELP {
   return (defined $_[0] ? $EMULATE_HELP = $_[0] : $EMULATE_HELP);
 }
+
+sub TIME_24 {
+  return (defined $_[0] ? $TIME_24 = $_[0] : $TIME_24);
+}
+
 

@@ -168,13 +168,12 @@ sub get_input {
     } else {
       $line = <STDIN>;
       # this doesn't work with v5+ preloaded input
-      unless (defined $line) {
-	$line = "";
-	print "\n";
-      }
+    }
+    unless (defined $line) {
+      $line = "";
+      print "\n";
     }
     chomp $line;
-    $line = "" unless defined($line);
     if ($have_term_readkey) {
       ReadMode(3);
 #      ReadLine(-1);
@@ -211,7 +210,7 @@ sub set_window {
       my $pb = Games::Rezrov::StoryFile::prompt_buffer();
       $self->newline();
       Games::Rezrov::StoryFile::set_window(Games::Rezrov::ZConst::LOWER_WIN);
-      my $message = "WARNING: this game is attempting to use multiple windows, which this implementation can't handle. The game may be unplayable using this interface.  You should probably use the Tk, Curses, Termcap, or Win32 interfaces if you can; see the documentation.";
+      my $message = "WARNING: this game is attempting to use multiple windows, which this interface can't handle. The game may be unplayable using this interface.  You should probably use the Tk, Curses, Termcap, or Win32 interfaces if you can; see the documentation.";
       $self->SUPER::buffer_zchunk(\$message);
       Games::Rezrov::StoryFile::flush();
       $self->newline();

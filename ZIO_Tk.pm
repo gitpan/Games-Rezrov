@@ -1,6 +1,6 @@
 package Games::Rezrov::ZIO_Tk;
 #
-# z-machine i/o for perls with Perl/Tk
+# z-machine i/o for perls with Perl/Tk.
 #
 
 use strict;
@@ -11,6 +11,8 @@ use Carp qw(cluck carp confess);
 
 use Games::Rezrov::ZConst;
 use Games::Rezrov::ZIO_Generic;
+use Games::Rezrov::ZIO_Color;
+use Games::Rezrov::FontVectors;
 
 use constant X_BORDER => 2;
 # FIX ME?
@@ -21,26 +23,22 @@ use constant STANDARD_COMPLIANT_BUT_EVEN_SLOWER => 0;
 use constant FIXED_FAMILY => "Courier";
 # FIX ME!
 
-use constant DEFAULT_BACKGROUND_COLOR => 'blue';
-use constant DEFAULT_FOREGROUND_COLOR => 'white';
-use constant DEFAULT_CURSOR_COLOR => 'black';
-
 use constant DEFAULT_BLINK_DELAY => 1000;
 
 #use constant TEXT_ANCHOR => "nw";
 use constant TEXT_ANCHOR => "w";
 
-@Games::Rezrov::ZIO_Tk::ISA = qw(Games::Rezrov::ZIO_Generic);
+@Games::Rezrov::ZIO_Tk::ISA = qw(
+				 Games::Rezrov::ZIO_Generic
+				 Games::Rezrov::ZIO_Color
+				);
 
 use Games::Rezrov::MethodMaker qw(
-			   sfg
-			   sbg
 			   dumb_fonts
 			   font_cache
 
 			   font_size
 			   line_height
-			   last_zstatus
 			   fixed_font_width
 			   current_font
 
@@ -58,296 +56,9 @@ use Games::Rezrov::MethodMaker qw(
 
 # again, a lot of statics for speed...
 my ($w_main, $c, $status_line, $upper_lines);
-my ($abs_x, $abs_y, $abs_row, $abs_col, $rows, %widgets);
+my ($abs_x, $abs_row, $abs_col, $rows, @widgets);
 my $Y_BORDER;
 my $initialized;
-
-my %f3_vectors = (
-		  32 => [],
-		  # space
-
-		  33 => [
-			 [ 1,4 => 7,4],
-			 [ 5,2 => 7,4],
-			 [ 5,6 => 7,4],
-			],
-		  # left arrow
-
-		  34 => [
-			 [ 7,4 => 1,4],
-			 [ 3,2 => 1,4],
-			 [ 3,6 => 1,4],
-			],
-		  # right arrow
-
-		  35 => [
-			 [ 7,7 => 0,0 ],
-			],
-		  # line: lower left to upper right
-
-		  36 => [
-			 [ 7,0 => 0,7 ],
-			],
-		  # line: upper left to lower right
-
-		  37 => [],
-		  # blank
-		  
-		  38 => [
-			 [0,4 => 7,4]
-			],
-		  # horizontal line
-
-		  39 => [
-			 [0,3 => 7,3]
-			],
-		  # horizontal line
-
-		  40 => [
-			 [3,0 => 3,7]
-			],
-		  # vertical line
-
-		  41 => [
-			 [4,0 => 4,7]
-			],
-		  # vertical line
-
-		  42 => [
-			 [0,3 => 7,3],
-			 [3,3 => 3,0],
-			 ],
-
-		  43 => [
-			 [7,4 => 0,4],
-			 [3,4 => 3,7],
-			],
-		  # junction: e,w,s
-
-		  44 => [
-			 [3,0 => 3,7],
-			 [3,4 => 0,4],
-			],
-		  # junction: n,s,e
-
-		  45 => [
-			 [4,0 => 4,7],
-			 [4,4 => 7,4],
-			],
-		  # junction: n,s,w
-
-		  46 => [
-			 [4,0 => 4,4 => 0,4],
-			],
-		  # lower-left corner
-
-		  47 => [
-			 [0,3 => 4,3 => 4,7],
-			],
-		  # upper-left corner
-
-		  48 => [
-			 [7,3 => 3,3 => 3,7],
-			],
-		  # upper-right corner
-
-		  49 => [
-			 [7,4 => 3,4 => 3,0],
-			],
-		  # lower-right corner
-
-		  50 => [
-			 [4,0 => 4,4 => 0,4],
-			 [4,4 => 7,7],
-			 ],
-		  # junction: n,e,sw
-
-		  51 => [
-			 [ 7,0 => 4,3 => 0, 3],
-			 [ 4,3 => 4,7],
-			],
-		  # junction: nw, e, s
-
-		  52 => [
-			 [7,3 => 3,3 => 0,0],
-			 [3,3 => 3,7],
-			],
-		  # junction: w,s,ne
-
-		  53 => [
-			 [ 3,0 => 3,4 => 7,4],
-			 [ 3,4 => 0,7],
-			],
-		  # junction: nw, e, s
-
-		  54 => [
-			 ["R" => 0,0 => 7,7 ],
-			],
-		  # completely solid fill
-
-		  55 => [
-			 ["R" => 0,0 => 7,4 ],
-			],
-		  # thick horizontal chunk, n-aligned
-
-
-		  56 => [
-			 ["R" => 0,3 => 7,7 ],
-			],
-		  # thick horizontal block, s-aligned
-
-		  57 => [
-			 ["R" => 7,0 => 3,7 ],
-			],
-		  # thick vertical line, left-aligned
-
-		  58 => [
-			 ["R" => 0,0 => 4,7 ],
-			],
-		  # thick vertical line, right-aligned
-
-		  59 => [
-			 [ "R" => 7,3 => 0,7],
-			 [ 3,3 => 3,0 ],
-			],
-		  # thick h chunk, s-aligned, line to N
-
-		  60 => [
-			 [ "R" => 0,0 => 7,4 ],
-			 [ 3,4 => 3,7],
-			],
-		  # thick H block aligned N with line to s
-
-		  61 => [
-			 [ "R" => 3,0 => 7,7 ],
-			 [ 0,4 => 7,4 ],
-			],
-		  # thick horizontal line, w-aligned, line to e
-
-		  62 => [
-			 ["R" => 0,0 => 4,7 ],
-			 [ 4,4 => 7,4 ],
-			],
-		  # thick H line, e-aligned, line to w
-
-
-		  63 => [
-			 [ "R" => 0,0 => 4,4 ],
-			],
-		  # small rectangle in ne
-
-		  64 => [
-			 [ "R" => 0,3 => 4,7 ],
-			],
-		  # small rectangle in se
-
-		  65 => [
-			 ["R" => 3,3 => 7,7 ],
-			],
-		  # small rectangle in sw
-
-		  66 => [
-			 ["R" => 7,0 => 3,4 ],
-			],
-		  # small rectangle in ne
-
-		  67 => [
-			 ["R" => 0,0 => 4,4 ],
-			 [ 4,4 => 7,7],
-			],
-
-		  68 => [
-			 ["R" => 0,3 => 4,7 ],
-			 [ 4,3 => 7,0 ]
-			],
-		  # small rectangle in se, line to ne
-
-		  69 => [
-			 ["R" => 3,3 => 7,7 ],
-			 [ 3,3 => 0,0 ],
-			],
-		  # small rectangle in sw, line to ne
-
-		  70 => [
-			 ["R" => 7,0 => 3,4 ],
-			 [3,4 => 0,7],
-			],
-		  # small rect in nw, line to se
-
-		  79 => [
-			 [0,1 => 7,1],
-			 [0,6 => 7,6],
-			],
-		  # 2 horizontal lines
-
-		  80 => [
-			 [ 0,1 => 7,1 => 7,6 => 0,6],
-			],
-		  # cutout
-
-		  81 => [
-			 [ "R" => 6,2 => 7,5],
-			 [ 0,1 => 7,1],
-			 [ 0,6 => 7,6],
-			 ],
-
-		  82 => [
-			 [ "R" => 5,2 => 7,5],
-			 [ 0,1 => 7,1],
-			 [ 0,6 => 7,6],
-			 ],
-
-		  83 => [
-			 [ "R" => 4,2 => 7,5],
-			 [ 0,1 => 7,1],
-			 [ 0,6 => 7,6],
-			 ],
-
-		  84 => [
-			 [ "R" => 3,2 => 7,5],
-			 [ 0,1 => 7,1],
-			 [ 0,6 => 7,6],
-			 ],
-
-		  85 => [
-			 [ "R" => 2,2 => 7,5],
-			 [ 0,1 => 7,1],
-			 [ 0,6 => 7,6],
-			],
-
-		  86 => [
-			 [ 0,1 => 7,1],
-			 [ 0,6 => 7,6],
-			 [ "R" => 1,2 => 7,5],
-			 ],
-		  
-		  87 => [
-			 [ "R" => 0,1 => 7,6 ],
-			],
-		  # thick block
-
-		  88 => [
-			 [ 0,1 => 0,6],
-			],
-		  # v line, e-aligned
-		  
-		  89 => [
-			 [7,1 => 7,6],
-			],
-		  # horizontal line, w-aligned
-
-		  92 => [
-			 [ 4,6 => 4,0 ],
-			 [ "P" => 1,2 => 4,0 => 7,2],
-			],
-
-		  93 => [
-			 [ 4,0 => 4,6 ],
-			 [ "P" => 1,4 => 4,6 => 7,4],
-			],
-		  # down arrow
-
-		 );
 
 sub new {
   my ($type, %options) = @_;
@@ -356,6 +67,7 @@ sub new {
   $self->options(\%options);
   $self->font_cache({});
   $self->zfont(Games::Rezrov::ZConst::FONT_NORMAL);
+  $abs_row=0;
   return $self;
 }
 
@@ -364,7 +76,7 @@ sub set_version {
   # set up window
   $w_main = MainWindow->new();
   $w_main->title("rezrov");
-  $w_main->bind('<Configure>' => [ $self => 'handle_resize' ]);
+  $w_main->bind('<Configure>' => [ $self => 'set_geometry' ]);
   $w_main->bind('<Control-c>' => [ $self => 'cleanup' ]);
 
   my $is_win32 = ($^O =~ /mswin32/i) ? 1 : 0;
@@ -385,7 +97,7 @@ sub set_version {
   $self->variable_font_family($vff);
   $self->font_size($options->{"fontsize"} || $DEFAULT_FONT_SIZE);
   
-  $self->init_colors($options);
+  $self->parse_color_options($options);
 
   my $f_variable = $self->set_text_style(Games::Rezrov::ZConst::STYLE_ROMAN);
   my $f_fixed = $self->set_text_style(Games::Rezrov::ZConst::STYLE_FIXED);
@@ -447,7 +159,7 @@ sub set_version {
 
   $abs_x = X_BORDER;
   # HACK
-  $abs_y = $canvas_y - $line_height;
+
   $abs_col = 0;
   $abs_row = int($canvas_y / $line_height);
 
@@ -500,6 +212,7 @@ sub create_text {
 sub write_string {
   my ($self, $string, $x, $y) = @_;
   $self->absolute_move($x, $y) if defined($x) and defined($y);
+  my $abs_y = $self->get_y();
   
 #  printf STDERR "ws: \"%s\" at %d,%d; font=%s\n", $string, $abs_col, $abs_row, $self->zfont();
 
@@ -509,33 +222,32 @@ sub write_string {
     $is_f3 = 1;
   }
 
-  my $lh = $self->line_height() * 0.59;
-  # HORRIBLE HACK; FIX ME!!!
-#  my $lh = $self->line_height() * 0.50;
-  my $ffw = $self->fixed_font_width();
-  my $x_fudge = $ffw / 2;
-#  my $after = $abs_x + (length($string) * $ffw) + $x_fudge;
-  my $after = $abs_x + ((length($string) + 1) * $ffw) - $x_fudge;
-#  printf STDERR "Wrote \"%s\" x=%s-%s, y=%s-%s\n", $string, $abs_x - $x_fudge, $after, $abs_y, $abs_y + $lh if $string =~ /more/i;
-#  printf STDERR "Wrote \"%s\" at %s,%s\n", $string, $abs_x, $abs_y if $string =~ /more/i;
-
-  foreach ($c->find("enclosed", $abs_x, $abs_y - $lh,
-		    $after, $abs_y + $lh)) {
-    if (1 or $c->type($_) eq "text") {
-#      printf STDERR "  removing item #%d (%s)\n", $_, $c->itemcget($_, "-text");
-      $c->delete($_);
+  foreach my $list (@widgets) {
+    # for each window...
+    my $line = $list->[$abs_row];
+    my $after = $abs_col + length($string);
+    for (my $col=$abs_col; $col < $after; $col++) {
+      # see if existing widgets exist at this location
+      if (exists $line->{$col}) {
+	# they do,
+	foreach (@{$line->{$col}}) {
+	  # so toss them.
+	  $c->delete($_);
+	}
+	delete $line->{$col};
+      }
     }
   }
-
+  
   my $is_reverse = Games::Rezrov::StoryFile::font_mask() & Games::Rezrov::ZConst::STYLE_REVERSE;
 
   my $id;
   if ($is_f3) {
 #    printf STDERR "f3: %d (%s), at %d,%d\n", ord($string), $string, $abs_col, $abs_row;
     print STDERR "reverse f3 char!\n" if $is_reverse;
-    if (my $vec_list = $f3_vectors{ord($string)}) {
+    if (my $vec_list = $Games::Rezrov::FontVectors::vecs{ord($string)}) {
       # list of vectors describing how to paint this character.
-      # These are grid coordinates based on section 16 of the spec, a la:
+      # These are grid coordinates based on section 16 of the spec, to wit:
       # 
       # 33(!):  76543210   34("):  76543210   35(#):  76543210
       #        0                  0                  0       #
@@ -547,8 +259,7 @@ sub write_string {
       #        6  #               6    #             6 #      
       #        7                  7                  7#       
       my ($x1, $y1);
-#      my $x_mult = $ffw / 8;
-      my $x_mult = $ffw / 7;
+      my $x_mult = $self->fixed_font_width() / 7;
 #      my $y_mult = $self->line_height() / 8;
       my $y_mult = $self->line_height() / 7;
       my $si;
@@ -627,6 +338,7 @@ sub create_reverse {
     $is_reverse = 0;
   }
 
+  my $abs_y = $self->get_y();
   my $top = $abs_y;
   my $bottom = $abs_y + $self->line_height();
 
@@ -675,50 +387,69 @@ sub newline {
 
   my $line_height = $_[0]->line_height();
   $abs_x = X_BORDER;
-  $abs_y += $line_height;
   $abs_row++;
   $abs_col = 0;
 
-#  my $count = 0;
-
-  my $ch = get_height();
-
-#  print STDERR "ar=$abs_row; $ch $abs_y $line_height\n";
-#  if ($abs_y >= $ch - $line_height) {
   if ($abs_row >= $rows) {
     # cursor is at bottom of screen; scroll needed
 
-    if (0) {
-      my $upper_protected = $upper_lines - 1;
-      # items created in the upper window do not scroll if they are within the
-      # current bounds of the upper window.
+    my ($id, $line, $ref);
+    for (my $win = 0; $win < @widgets; $win++) {
+      die "eek, unknown window $win" if 
+	$win != Games::Rezrov::ZConst::LOWER_WIN and
+	  $win != Games::Rezrov::ZConst::UPPER_WIN;
+      my $is_lower = $win == Games::Rezrov::ZConst::LOWER_WIN;
+	  
+      my $ref = $widgets[$win];
+      my @goner_rows;
 
-    } else {
-      my ($id, $protected, $line, $ref);
-      foreach my $win (keys %widgets) {
-	$protected = $win == Games::Rezrov::ZConst::UPPER_WIN ? $upper_lines - 1 : undef;
-	# items created in the upper window do not scroll if they are within the
-	# current bounds of the upper window.
-	$ref = $widgets{$win};
-	while (($id, $line) = each %{$ref}) {
-	  #	$count++;
-	  unless (defined($protected) and $line <= $protected) {
-	    if ($line-- <= $upper_lines) {
-	      # item will be offscreen after scroll, delete it instead
-	      #	    print STDERR "deleting $id\n";
-	      $c->delete($id);
-	      delete $ref->{$id};
-	    } else {
-	      # scroll up
-	      $c->move($id, 0, - $line_height);
-	      $ref->{$id} = $line;
-	    }
+      for (my $line=0; $line < $#{$ref}; $line++) {
+	if ($is_lower) {
+	  # lower window:
+	  if ($line <= $upper_lines) {
+	    # if a lower window line is "underneath" the upper window,
+	    # delete its contents.
+	    push @goner_rows, $ref->[$line];
 	  }
+	} else {
+	  # upper window:
+	  # 
+	  # items created in the upper window do not scroll if they are
+	  # within the current bounds of the upper window.
+	  next if ($line < $upper_lines);
+	  @goner_rows = $ref->[$line] if $line == $upper_lines;
+	}
+	$ref->[$line] = $ref->[$line + 1];
+	# scroll line references up one
+	
+	foreach (values %{$ref->[$line]}) {
+	  foreach (@{$_}) {
+	    # scroll each widget on the line
+	    $c->move($_, 0, - $line_height);
+	    if (0 and $c->type($_) eq "text") {
+	      printf "now line %d (upr=%d): %s\n",
+	      $line,
+	      $upper_lines,
+	      $c->itemcget($_, "-text");
+	    }
+	  }	    
 	}
       }
+      $ref->[$#{$ref}] = {};
+      # "blank" last line
+
+#      printf "goners: %d\n", scalar @goner_rows;
+      foreach (@goner_rows) {
+	# something still funny about this...why ever more than one?
+	# [bureaucracy]
+	foreach (values %{$_}) {
+	  $c->delete($_) foreach @{$_};
+#	  print "goner: $_\n", $c->delete($_) foreach @{$_};
+	}
+      }
+
     }
-      
-    $abs_y -= $line_height;
+    
     $abs_row--;
   }
 
@@ -747,11 +478,16 @@ sub absolute_move {
   # set absolute column, row position; independent of window!
   my ($self, $col, $row) = @_;
 
-#  cluck sprintf "am: %d,%d = %s,%s\n", $col, $row, $abs_x, $abs_y;
+#  printf STDERR "am: %d,%d = %s,%s\n", $col, $row, $abs_x, $self->get_y();
 
   Games::Rezrov::StoryFile::flush();
   $abs_x = X_BORDER + ($col * $self->fixed_font_width());
-  $abs_y = $Y_BORDER + ($row * $self->line_height());
+  # $abs_x is needed because of variable-width font in lower window
+  # makes column-to-pixel translations inconvenient.
+  #
+  # absolute Y pixel position is calculated dynamically because the
+  # same line height is used for both fixed-width and variable fonts.
+  #
   # when text items are created, with anchor "w" they are centered
   # vertically at the given coordinates.  So at row 0, text will
   # be drawn from  (- (font_height / 2)) to (font_height / 2).
@@ -764,12 +500,8 @@ sub absolute_move {
   $abs_col = $col;
 }
 
-sub absolute_move_pixels {
-  ($abs_x, $abs_y) = @_[1,2];
-}
-
 sub get_pixel_position {
-  return ($abs_x, $abs_y);
+  return ($abs_x, $_[0]->get_y());
 }
 
 sub get_pixel_geometry {
@@ -782,12 +514,13 @@ sub get_position {
   # With an argument, return a sub that will restore the current cursor
   # position.
   my ($self, $sub) = @_;
-  my ($x, $y, $r, $c) = ($abs_x, $abs_y, $abs_row, $abs_col);
+#  my ($x, $y, $r, $c) = ($abs_x, $abs_y, $abs_row, $abs_col);
+  my ($x, $r, $c) = ($abs_x, $abs_row, $abs_col);
   if ($sub) {
     return sub {
-#      print STDERR "restoring x=$x y=$y\n";
+#      print STDERR "restoring x=$x y=$y, ar=$r, ac=$c\n";
       $abs_x = $x;
-      $abs_y = $y;
+#      $abs_y = $y;
       $abs_row = $r;
       $abs_col = $c;
     };
@@ -804,35 +537,20 @@ sub status_hook {
   # might be possible to move this back to story:
   #  - measure string widths to position?
   #  - redraw when columns change?
-  my ($self, $zstatus) = @_;
+  my ($self, $location, $right_chunk) = @_;
 
-  $self->last_zstatus($zstatus);
   my $y = $status_line->height() / 2;
   $status_line->delete($status_line->find("all"));
   my $id = $self->create_text($status_line,
 			      X_BORDER, $y,
 			      "-anchor" => "w",
-			      "-text" => $zstatus->location,
+			      "-text" => $location,
 			      "-fill" => $self->sfg());
 
-  my $string;
-  if ($zstatus->time_game()) {
-    my $hours = $zstatus->hours();
-    my $minutes = $zstatus->minutes();
-    my $style = $hours < 12 ? "AM" : "PM";
-    $string = sprintf("Time: %d:%02d%s",
-			 ($hours > 12 ? $hours - 12 : $hours),
-			 $minutes, $style);
-  } else {
-    my $score = $zstatus->score();
-    my $moves = $zstatus->moves();
-    my $buf = length($score) + length($moves);
-    $string = "Score: " . $score . "  Moves: " . $moves;
-  }
   $id = $self->create_text($status_line,
 			   200, $y,
 			   "-anchor" => "e",
-			   "-text" => $string,
+			   "-text" => $right_chunk,
 			   "-fill" => $self->sfg());
   my ($x1, $y1, $x2, $y2) = $status_line->bbox($id);
   $status_line->move($id, $c->width() - X_BORDER - $x2, 0);
@@ -841,7 +559,7 @@ sub status_hook {
 
 sub cursor_on {
   my ($self, $x) = @_;
-#  print STDERR "cursor_on at $x\n";
+#  printf STDERR "cursor_on at (%d, %d), line %d\n", $x, $abs_y, $abs_row;
   $self->cursor_x($x);
   $self->cursor_status(1);
   $self->draw_cursor();
@@ -860,6 +578,7 @@ sub draw_cursor {
 #    my $bottom = $abs_y + $self->line_height();
 
     my $lh2 = $self->line_height() / 2;
+    my $abs_y = $self->get_y();
     my $top = $abs_y - $lh2;
     my $bottom = $abs_y + $lh2;
 
@@ -902,7 +621,8 @@ sub get_input {
       my $width = $self->string_width($pre);
       $last_id = $self->create_text($c,
 				    $abs_x - $width,
-				    $abs_y,
+#				    $abs_y,
+				    $self->get_y(),
 				    "-anchor" => TEXT_ANCHOR,
 				    "-text" => $pre,
 				    "-fill" => $self->fg(),
@@ -925,7 +645,13 @@ sub get_input {
     my $key;
     my $supplied;
     if (ref $_[0]) {
-      $key = ord($w_main->XEvent()->A()) unless $key;
+      if ($_[1]) {
+	# supplied
+	$supplied = 1;
+	$key = $_[1];
+      } else {
+	$key = ord($w_main->XEvent()->A());
+      }
     } else {
       # manually passed; documentation for XEvent methods???
       $key = $_[0];
@@ -961,11 +687,12 @@ sub get_input {
       my $cwin = $self->current_window();
       if ($last_id) {
 	$c->delete($last_id);
-	delete $widgets{$cwin}{$last_id};
       }
       $self->cursor_off();
       $last_id = $self->create_text($c,
-				    $abs_x, $abs_y,
+				    $abs_x,
+				    #$abs_y,
+				    $self->get_y(),
 				    "-anchor" => TEXT_ANCHOR,
 				    "-text" => $buffer,
 				    "-fill" => $self->fg());
@@ -1001,28 +728,38 @@ sub bind_keys_to {
 }
 
 sub clear_to_eol {
-  my $lh = $_[0]->line_height();
+  foreach my $list (@widgets) {
+    # for each window's widgets...
+    while (my ($column, $ids) = each %{$list->[$abs_row]}) {
+      # find the widgets in the line to be cleared...
+      if ($column >= $abs_col) {
+	$c->delete($_) foreach (@{$ids});
+	# and toss them.
+	delete $list->[$abs_row]->{$column};
+      }
+    }
+  }
+}
 
-  my @l = $c->find("enclosed",
-		   0,
-		   $abs_y - $lh,
-		   $c->width(),
-		   $abs_y + $lh);
-
-  $c->delete(@l);
-#  print STDERR "el: $_[1]\n";
-#  $c->create("text", 10, $abs_y, "-text" => "line $_[1]");
-#  $c->update;
-#  sleep 1000;
+sub set_background_color {
+  $c->configure("-bg" => $_[0]->bg());
 }
 
 sub clear_screen {
   # clear the entire screen
   $c->delete($c->find("all"));
-  %widgets = ();
-  $c->configure("-bg" => $_[0]->bg());
-  # make sure the canvas background is set to the background color
-  # currently in effect.  This is critical for games like "photopia.z5"
+  @widgets = ();
+  widget_setup();
+}
+
+sub widget_setup {
+  for (my $win=0; $win < 2; $win++) {
+    $widgets[$win] = [] unless defined $widgets[$win];
+    my $ref = $widgets[$win];
+    for (my $row = 0; $row <= $rows; $row++) {
+      $ref->[$row] = {} unless defined $ref->[$row];
+    }
+  }
 }
 
 sub set_text_style {
@@ -1078,32 +815,6 @@ sub cleanup {
   # but if we do this, will we miss a die() message elsewhere?
 }
 
-sub init_colors {
-  my ($self, $options) = @_;
-  if ($options->{"fg"} and $options->{"bg"}) {
-    # FIX ME: check colors
-    $self->default_fg($options->{"fg"});
-    $self->default_bg($options->{"bg"});
-    if ($options->{"sfg"} and $options->{"sbg"}) {
-      $self->sfg($options->{"sfg"});
-      $self->sbg($options->{"sbg"});
-    } else {
-      # default; use inverse for status line
-      $self->sfg($self->default_bg());
-      $self->sbg($self->default_fg());
-    }
-  } else {
-    $self->default_fg(DEFAULT_FOREGROUND_COLOR);
-    $self->default_bg(DEFAULT_BACKGROUND_COLOR);
-    $self->sfg(DEFAULT_BACKGROUND_COLOR);
-    $self->sbg(DEFAULT_FOREGROUND_COLOR);
-    # status = invert
-  }
-  $self->fg($self->default_fg());
-  $self->bg($self->default_bg());
-  $self->cc($options->{"cc"} || DEFAULT_CURSOR_COLOR);
-}
-
 sub validate_family {
   my ($self, $family) = @_;
   my %families = map {lc($_) => 1} $w_main->fontFamilies();
@@ -1111,14 +822,7 @@ sub validate_family {
     return $family;
   } else {
     die sprintf "%s is not a valid font family on your system.  Valid families are: %s\n", $family, join ", ", sort keys %families;
-    
   }
-}
-
-sub handle_resize {
-  my ($self) = @_;
-  $self->status_hook($self->last_zstatus()) if $self->last_zstatus();
-  $self->set_geometry();
 }
 
 sub blink_init {
@@ -1150,15 +854,11 @@ sub split_window {
 }
 
 sub get_height {
-  my $h = $c->height();
-  $h = $c->reqheight() if $h == 1;
-  return $h;
+  return $c->height() == 1 ? $c->reqheight() : $c->height();
 }
 
 sub get_width {
-  my $w = $c->width();
-  $w = $c->reqwidth() if $w == 1;
-  return $w;
+  return $c->width() == 1 ? $c->reqwidth() : $c->width();
 }
 
 sub set_geometry {
@@ -1167,22 +867,18 @@ sub set_geometry {
   my ($cx, $cy) = $self->get_pixel_geometry();
   my $lh = $self->line_height();
 
-  $rows = int($cy / $lh);
-  my $columns = int($cx / $self->fixed_font_width());
-#  printf STDERR "cx:%d cy:%d lh:%d geometry: %dx%d\n",
-#  $cx, $cy, $self->line_height(), $columns, $rows;
+  my $old_y = $self->get_y();
 
+  $rows = $cy / $lh;
+  widget_setup();
+  my $columns = int($cx / $self->fixed_font_width());
+#  printf STDERR "set_geometry: cx:%d cy:%d lh:%d geometry: %dx%d\n", $cx, $cy, $self->line_height(), $columns, $rows;
 #  print STDERR "rows: $rows\n";
   Games::Rezrov::StoryFile::rows($rows);
   Games::Rezrov::StoryFile::columns($columns);
-  
-  if (defined($abs_y)) {
-      my $bottom = $Y_BORDER + ($rows * $self->line_height());
-      if ($abs_y > $bottom) {
-	  # eek, cursor is below the bottom of the new screen
-	  $abs_y = $bottom;
-      }
-  }
+
+  $abs_row = $rows if ($old_y > $cy);
+  # if window is now smaller than where cursor was last
 }
 
 sub biggest_metric {
@@ -1199,7 +895,10 @@ sub set_font {
 }
 
 sub track_widget {
-  $widgets{$_[0]->current_window()}{$_[1]} = $abs_row;
+#  push @{$widgets[$cwin][$abs_row]->{$abs_col}}, $_[1];
+  push @{$widgets[$_[0]->current_window()][$abs_row]->{$abs_col}}, $_[1];
+  # an array is required for each location, as layered widgets are
+  # used to achieve "inverse video" effect
 }
 
 sub column_list {
@@ -1220,6 +919,11 @@ sub column_list {
     push @results, sprintf $format, splice(@list,0,$columns);
   }
   return @results;
+}
+
+sub get_y {
+  # translate current row into a pixel position
+  return $Y_BORDER + ($abs_row * $_[0]->line_height());
 }
 
 1;

@@ -171,10 +171,10 @@ sub interpret {
   my @operands;
   my @op_counts;
   my $oc;
-  my $where;
   my $input_counts = 0;
   my $count_opcodes = Games::Rezrov::ZOptions::COUNT_OPCODES();
   my $write_opcodes = Games::Rezrov::ZOptions::WRITE_OPCODES();
+  my $thing;
 
   my $var_ops = 0;
   my $orig_opcode;
@@ -188,18 +188,30 @@ sub interpret {
     if (($opcode & 0x80) == 0) {
       #
       #
-      # top bit is zero: opcode is "long" format.
+      # top bit is zero: opcode is "long" or "2OP" format.
       # Handle these first as they seem to be the most common.
       #
       #
       # spec 4.4.2:
+      # most readable but slowest:
 #      @operands = ($story->load_operand(($opcode & 0x40) == 0 ? 1 : 2),
 #		   $story->load_operand(($opcode & 0x20) == 0 ? 1 : 2));
       
-      @operands = (($opcode & 0x40) == 0 ?
-		   GET_BYTE() : Games::Rezrov::StoryFile::get_variable(GET_BYTE()),
-		   ($opcode & 0x20) == 0 ?
-		   GET_BYTE() : Games::Rezrov::StoryFile::get_variable(GET_BYTE()));
+      # faster:
+#      @operands = (($opcode & 0x40) == 0 ?
+#		   GET_BYTE() : Games::Rezrov::StoryFile::get_variable(GET_BYTE()),
+#		   ($opcode & 0x20) == 0 ?
+#		   GET_BYTE() : Games::Rezrov::StoryFile::get_variable(GET_BYTE()));
+      # faster yet:
+      @operands = ();
+      $thing = GET_BYTE();
+      $operands[0] = ($opcode & 0x40) == 0 ?
+	$thing : Games::Rezrov::StoryFile::get_variable($thing);
+
+      $thing = GET_BYTE();
+      $operands[1] = ($opcode & 0x20) == 0 ?
+	$thing : Games::Rezrov::StoryFile::get_variable($thing);
+      
       $opcode &= 0x1f; # last 5 bits
       $op_style = OP_2OP;
     } elsif ($opcode & 0x40) {
@@ -238,11 +250,11 @@ sub interpret {
 	# push @operands, $story->load_operand((($opcode & 0x30) >> 4));
 	$optype = ($opcode & 0x30) >> 4;
 	# 4.2:
-	if ($optype == 2) {
-	  push @operands, Games::Rezrov::StoryFile::get_variable(GET_BYTE());
-	} elsif ($optype == 1) {
-	  push @operands, GET_BYTE();
-	} elsif ($optype == 0) {
+	if ($optype > 0) {
+	  $thing = GET_BYTE();
+	  push @operands, $optype == 1 ? $thing :
+	    Games::Rezrov::StoryFile::get_variable($thing);
+	} else {
 	  push @operands, GET_WORD();
 	}
 	$opcode &= 0x0f;
@@ -270,18 +282,18 @@ sub interpret {
 	# sadly, it\'s slower to pack() the optypes and extract the
 	# elements with vec($operand_types, $x, 2) than to bit-twiddle.
 	$optype = ($operand_types >> $i) & 0x03;
-#	print STDERR "$optype ";
+#	print STDERR "$optype\n";
 #	push @operands, $story->load_operand($optype);
-#	last if $optype == 0x03;
-	if ($optype == 2) {
-	  push @operands, Games::Rezrov::StoryFile::get_variable(GET_BYTE());
-	} elsif ($optype == 1) {
-	  push @operands, GET_BYTE();
-	} elsif ($optype == 0) {
-	  push @operands, GET_WORD();
+	last if $optype == 0x03;
+	if ($optype > 0) {
+	  # 1 = literal byte
+	  # 2 = variable of that byte
+	  $thing = GET_BYTE();
+	  push @operands, $optype == 1 ? $thing :
+	    Games::Rezrov::StoryFile::get_variable($thing);
 	} else {
-	  # 4.4.3: 0x03 means "no more operands"
-	  last;
+	  # 0 = word
+	  push @operands, GET_WORD();
 	}
       }
 #      print STDERR "\n";
@@ -300,7 +312,7 @@ sub interpret {
       # FIX ME: speed?
       printf LOG "count:%d pc:%d type:%s opcode:%d(0x%02x;raw=%d) (%s) operands:%s\n",
       $opcode_count,
-      $start_pc + 1,
+      $start_pc,
       $TYPE_LABELS[$op_style],
       $opcode,
       $opcode,
@@ -329,11 +341,6 @@ sub interpret {
       no strict "refs";
       &{"Games::Rezrov::StoryFile::$oc"}(@operands);
       # @operands contains the correct number of operands; just pass them
-    } elsif ($op_style == OP_2OP) {
-      #
-      #  2-operand opcodes (well, mostly)
-      #
-      $self->zi_die($op_style, $opcode, $opcode_count);
     } elsif ($op_style == OP_1OP) {
       #
       # one operand opcodes
@@ -346,9 +353,6 @@ sub interpret {
 #	  return $result;
 #	}
 	# async interpreter call (v4+), not implemented
-      } elsif ($opcode == 0x0f) {
-	die("bitwise not, FIX ME") if ($z_version < 5);
-	Games::Rezrov::StoryFile::call(\@operands, Games::Rezrov::StoryFile::FRAME_PROCEDURE);
       } else {
 	$self->zi_die($op_style, $opcode, $opcode_count);
       }
@@ -388,8 +392,6 @@ sub interpret {
       } else {
 	$self->zi_die($op_style, $opcode, $opcode_count);
       }
-    } elsif ($op_style == OP_EXT) {
-      $self->zi_die($op_style, $opcode, $opcode_count);
     } else {
       $self->zi_die($op_style, $opcode, $opcode_count);
     }
@@ -398,6 +400,7 @@ sub interpret {
   $zio->newline();
   $zio->write_string("*** End of session ***");
   $zio->newline();
+  $zio->update();
   $zio->get_input(1,1);
 
   $zio->set_game_title(" ") if Games::Rezrov::StoryFile::game_title();

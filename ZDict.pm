@@ -27,11 +27,16 @@ use Games::Rezrov::MethodMaker ([],
 			    last_random
 			   ));
 
+use constant OMAP_START_INDENT => 1;
+use constant OMAP_INDENT_STEP => 3;
+
 use constant ZORK_1 => ("Zork I", 88, "840726", 41257);
 use constant ZORK_2 => ("Zork II", 48, "840904", 55449);
 use constant ZORK_3 => ("Zork III", 17, "840727", 11898);
 use constant INFIDEL => ("Infidel", 22, "830916", 16674);
 use constant ZTUU => ("Zork: The Undiscovered Underground", 16, 970828, 4485);
+use constant PLANETFALL => ("Planetfall", 37, "851003", 726);
+use constant BUREAUCRACY => ("Bureaucracy", 116, 870602, 64613);
 
 use constant SNIDE_MESSAGES => (
 				'A hollow voice says, "cretin."',
@@ -117,6 +122,13 @@ use constant TRAVIS_MESSAGES => (
 				 "The %s glows wickedly.",
 				);
 
+use constant LUMMOX_MESSAGES => (
+				 "Your load feels less heavy.",
+				 "Your possessions seem suddenly ephemeral.",
+#				 "Suddenly, you get some great ideas on how to reorganize your closet.",
+				 "You are struck with some great ideas on how to reorganize your closet.",
+				);
+
 use constant HELP_INFOCOM_URLS => (
 				   "http://www.csd.uwo.ca/~pete/Infocom/Invisiclues/",
 				  );
@@ -142,6 +154,14 @@ use constant HELP_GENERIC_URLS => (
 						    "#sa",
 						    "#dta",
 						    "#dat", "spiel",
+						    "#sprop",
+						    "rooms",
+						    "items",
+						    "#sgv",
+						    "#slv",
+						    "#ggv",
+						    "lummox",
+						    "systolic",
 						   );
 
 %Games::Rezrov::ZDict::ALIASES = (
@@ -377,32 +397,22 @@ sub tokenize_line {
 		 exists $Games::Rezrov::ZDict::ALIASES{$untrunc_token}) {
 	  $addr = $self->get_dictionary_address($Games::Rezrov::ZDict::ALIASES{$untrunc_token});
 	} elsif (Games::Rezrov::ZOptions::EMULATE_COMMAND_SCRIPT() and
-		 $token eq "#reco" or
-		 $token eq "#unre" or
-		 $token eq "#comm") {
-	  if ($token eq "#comm") {
+		 $untrunc_token eq "#reco" or
+		 $untrunc_token eq "#unre" or
+		 $untrunc_token eq "#comm") {
+	  if ($untrunc_token eq "#comm") {
 	    # play back commands
 	    Games::Rezrov::StoryFile::input_stream(Games::Rezrov::ZConst::INPUT_FILE);
 	  } else {
-	    Games::Rezrov::StoryFile::output_stream($token eq "#reco" ? Games::Rezrov::ZConst::STREAM_COMMANDS : - Games::Rezrov::ZConst::STREAM_COMMANDS);
+	    Games::Rezrov::StoryFile::output_stream($untrunc_token eq "#reco" ? Games::Rezrov::ZConst::STREAM_COMMANDS : - Games::Rezrov::ZConst::STREAM_COMMANDS);
 	  }
 	  $self->newline();
 	  $self->suppress_output();
-	} elsif ($token eq "#cheat") {
+	} elsif ($untrunc_token eq "#cheat") {
 	  my $status = !(Games::Rezrov::ZOptions::MAGIC());
 	  Games::Rezrov::ZOptions::MAGIC($status);
 	  $self->write_text(sprintf "Cheating is now %sabled.", $status ? "en" : "dis");
 	  $self->newline();
-	  $self->newline();
-	  $self->suppress_output();
-	} elsif ($token eq "rooms") {
-	  # print room names
-	  $self->dump_objects(2);
-	  $self->newline();
-	  $self->suppress_output();
-	} elsif ($token eq "items") {
-	  # print item names
-	  $self->dump_objects(3);
 	  $self->newline();
 	  $self->suppress_output();
 	}
@@ -590,6 +600,16 @@ sub magic {
 	$self->newline();
       }
     }
+  } elsif ($token eq "rooms") {
+    $self->dump_objects(2);
+  } elsif ($token eq "items") {
+    $self->dump_objects(3);
+  } elsif ($token eq "systolic") {
+    # lower blood pressure (Bureaucracy only)
+    $self->systolic();
+  } elsif ($token eq "lummox") {
+    # remove restrictions on weight and number of items that can be carried
+    $self->lummox();
   } elsif ($token eq "omap") {
     # dump object relationships
     $self->dump_objects(1, $what);
@@ -613,6 +633,17 @@ sub magic {
     } else {
       $self->write_text("Tell me what to set your score to.");
     }
+  } elsif ($token =~ "#sgv") {
+    my ($var, $value) = split /\s+/, $what;
+    $self->write_text("Setting global variable $var to $value.");
+    Games::Rezrov::StoryFile::set_global_var($var, $value);
+  } elsif ($token =~ "#slv") {
+    my ($var, $value) = split /\s+/, $what;
+    $self->write_text("Setting local variable $var to $value.");
+    Games::Rezrov::StoryFile::set_variable($var, $value);
+  } elsif ($token =~ "#ggv") {
+    $self->write_text(sprintf "Global variable %d is %d.", $what,
+		      Games::Rezrov::StoryFile::get_global_var($what));
   } elsif ($token =~ "#?teleport") {
     $self->teleport($what);
   } elsif ($token eq "travis" or $token eq "bickle") {
@@ -627,6 +658,8 @@ sub magic {
     $self->decode_text_at($what);
   } elsif ($token eq "#dat" or $token eq "spiel") {
     $self->decode_all_text(split /\s+/, $what);
+  } elsif ($token eq "#sprop") {
+    $self->property_dump($what);
   } else {
     # pilfer or bamf
     my @hits = $what ? $object_cache->find($what, "-room" => 0) : ();
@@ -829,9 +862,9 @@ sub dump_objects {
 						     $object_cache);
 
 	if (my $pr = $zstat->parent_room()) {
-	  $self->dump_object($pr, 1, 1);
+	  $self->dump_object($pr, OMAP_START_INDENT, 1);
 	} else {
-	  $self->dump_object($object_cache->get($hits[0]->[0]), 1, 1);
+	  $self->dump_object($object_cache->get($hits[0]->[0]), OMAP_START_INDENT, 1);
 	}
       } else {
 	$self->write_text(sprintf 'I have no idea what you mean by "%s."', $what);
@@ -855,7 +888,7 @@ sub dump_objects {
 
       foreach (@tops) {
 	next if exists $seen{$_};
-	$self->dump_object($objs{$_}, 1, 0, \%seen);
+	$self->dump_object($objs{$_}, OMAP_START_INDENT, 0, \%seen);
       }
     }
   } else {
@@ -885,11 +918,9 @@ sub dump_object {
       $seen_ref->{$id} = 1;
     }
     $self->newline();
-    $self->write_text((" " x $indent) .
-		       $$desc . 
-		       " ($id)");
+    $self->write_text((" " x $indent) . $$desc . " ($id)");
     my $child = $object_cache->get($object->get_child_id());
-    $self->dump_object($child, $indent + 3, 0, $seen_ref) if $child and
+    $self->dump_object($child, $indent + OMAP_INDENT_STEP, 0, $seen_ref) if $child and
       $child->object_id() and
       $child->object_id() <= $last;
     unless ($no_sibs) {
@@ -913,7 +944,7 @@ sub teleport {
   if (!$where) {
     $self->write_text("Where to?");
   } elsif (!$player_object) {
-    $self->write_text("Sorry, I'm not sure where you are just yet...");
+    $self->write_text("Sorry, I haven't got my bearings just yet; try again in a few moves.");
   } else {
     my $object_cache = $self->get_object_cache();
     my @hits = $object_cache->find($where, "-room" => 1);
@@ -1006,6 +1037,7 @@ sub frotz {
 			 # attribute 10 seems to show "lit and burning" in
 			 # inventory
 			 [ ZTUU, 9 ],
+			 [ PLANETFALL, 5 ]
 			);
 
   my @attributes = $self->support_check(@SUPPORTED_GAMES);
@@ -1119,7 +1151,7 @@ sub support_check {
     }
   }
   # failed, complain:
-  $self->write_text("Sorry, this trick only currently works in the following games:");
+  $self->write_text(sprintf "Sorry, this trick only currently works in the following game%s:", scalar @list == 1 ? "" : "s");
   foreach (@list) {
     $self->newline();
     $self->write_text(sprintf "  - %s (release %d, serial number %s, checksum %s)", @{$_});
@@ -1584,6 +1616,75 @@ sub write_text {
 
 sub suppress_output {
   Games::Rezrov::StoryFile::suppress_hack();
+}
+
+sub property_dump {
+  my ($self, $what) = @_;
+  my $header = Games::Rezrov::StoryFile::header();
+  my $max_objects = $header->max_objects();
+  my $oc = $self->object_cache();
+  for (my $i=1; $i <= $max_objects; $i++) {
+    my $zo = $oc->get($i);
+    my $zp = $zo->get_property(Games::Rezrov::ZProperty::FIRST_PROPERTY);
+    printf STDERR "%s: %s\n",
+    ${$zo->print},
+  ($zp->property_exists() ? $zp->property_number() : "no properties");
+}
+}
+
+sub lummox {
+  # cheat command: remove restrictions on weight and number of items
+  # that can be carried.  So far, it seems that there are two global
+  # variables involved: one holds the total weight of items that may
+  # be carried, the other the maximum number of items that may be carried.
+  #
+  # Usually a 2OP compare_* opcode precedes this operation:
+  #
+  # count:1358 pc:37207 type:2OP opcode:3(0x03;raw=99) (compare_jg) operands:112,100
+  # count:1359 pc:37211 type:1OP opcode:0(0x00;raw=160) (compare_jz) operands:1
+  # count:1360 pc:37214 type:0OP opcode:2(0x02;raw=178) (print_text) operands:
+  # count:1361 pc:37227 type:2OP opcode:2(0x02;raw=98) (compare_jl) operands:100,100
+  # count:1362 pc:37259 type:0OP opcode:2(0x02;raw=178) (print_text) operands:
+  # count:1363 pc:37262 type:0OP opcode:11(0x0b;raw=187) (newline) operands:
+  # brass lantern: Your load is too heavy.
+  #
+  # see the "-hack" command-line switch to help decode which variable is used
+  # for the opcode; in this case (Zork I, PC 37207, global variable # 133).
+
+  my ($self) = @_;
+  my @SUPPORTED_GAMES = (
+			 [ ZORK_1, 133, 59 ],
+			 [ ZORK_2, 159, 83 ],
+			 [ ZORK_3, 184, 116 ],
+			 [ PLANETFALL, 218, 128 ],
+			);
+  
+
+  my ($total_weight, $max_items) = $self->support_check(@SUPPORTED_GAMES);
+  return unless $total_weight;
+
+  my $LOTSA_WEIGHT = 32000;
+  my $LOTSA_ITEMS = 250;
+  if (Games::Rezrov::StoryFile::get_global_var($total_weight) == $LOTSA_WEIGHT and Games::Rezrov::StoryFile::get_global_var($max_items) == $LOTSA_ITEMS) {
+    $self->write_text("You feel pretty pumped up already.");
+  } else {
+    Games::Rezrov::StoryFile::set_global_var($total_weight, $LOTSA_WEIGHT);
+    Games::Rezrov::StoryFile::set_global_var($max_items, $LOTSA_ITEMS);
+    $self->write_text($self->random_message(LUMMOX_MESSAGES));
+  }
+}
+
+sub systolic {
+  # cheat command: lower blood pressure (bureaucracy only)
+  my $self = shift;
+  my @SUPPORTED_GAMES = (
+			 [ BUREAUCRACY, 232, 32082 ]
+			);
+
+  if (my ($var, $value) = $self->support_check(@SUPPORTED_GAMES)) {
+    Games::Rezrov::StoryFile::set_global_var($var, $value);
+    $self->write_text("You feel a bit calmer.");
+  }
 }
 
 1;

@@ -3,19 +3,22 @@ package Games::Rezrov::ZIO_Curses;
 # z-machine i/o for perls with the Curses module installed.
 #
 use strict;
-use Carp qw(cluck);
+use Carp qw(cluck confess);
 
-@Games::Rezrov::ZIO_Curses::ISA = qw(Games::Rezrov::ZIO_Generic);
+@Games::Rezrov::ZIO_Curses::ISA = qw(
+				     Games::Rezrov::ZIO_Generic
+				     Games::Rezrov::ZIO_Color
+				    );
 
 use Curses;
 
 use Games::Rezrov::ZOptions;
 use Games::Rezrov::ZIO_Generic;
+use Games::Rezrov::ZIO_Color;
 use Games::Rezrov::ZConst;
 use Games::Rezrov::ZIO_Tools;
 use Games::Rezrov::MethodMaker qw(
 				  need_endwin
-				  custom_status_colors
 				  rows
 				  columns
 				  term_readline
@@ -65,6 +68,7 @@ sub new {
   $w_main->keypad(1);
 
   $self->color_pairs({});
+  $self->parse_color_options(\%options);
   $self->init_colors(\%options);
   
   $self->zfont(Games::Rezrov::ZConst::FONT_NORMAL);
@@ -96,11 +100,14 @@ sub set_version {
   return 0;
 }
 
+sub set_background_color {
+  if (has_colors() and
+      $_[0]->fg() and $_[0]->bg()) {
+    $_[0]->do_colors($_[0]->fg(), $_[0]->bg());
+  }
+}
+
 sub clear_screen {
-  my $self = shift;
-  $self->do_colors($self->fg(), $self->bg())
-    if has_colors() and $self->fg() and $self->bg();
-  # make sure colors are set up correctly
   $w_main->erase();
   # erase
 }
@@ -175,10 +182,9 @@ sub status_hook {
   my ($self, $type) = @_;
   # 0 = before
   # 1 = after
-  my $custom_status = $self->custom_status_colors();
   if ($type == 0) {
     # before printing status line
-    if ($custom_status) {
+    if (has_colors()) {
       $w_main->bkgd(0);
 #      $w_main->attrset(COLOR_PAIR(2));
       $self->do_colors($self->sfg(), $self->sbg());
@@ -187,9 +193,11 @@ sub status_hook {
     }
   } else {
     # after printing status line
-#    $w_main->bkgdset(COLOR_PAIR(1)) if $custom_status;
-    $self->do_colors($self->fg(), $self->bg());
-    $w_main->attrset(A_NORMAL);
+    if (has_colors()) {
+      $self->do_colors($self->fg(), $self->bg());
+    } else {
+      $w_main->attrset(A_NORMAL);
+    }
   }
 }
 
@@ -203,6 +211,8 @@ sub write_string {
 sub get_input {
   my ($self, $max, $single_char, %options) = @_;
   my $result;
+#  printf STDERR "geom: %s %s\n", $Curses::COLS, $Curses::LINES;
+  # hmm, how to detect terminal geometry changes?
   echo();
   if ($single_char) {
     $result = get_char();
@@ -231,8 +241,10 @@ sub get_input {
       while (1) {
 	$char = $w_main->getch();
 	$ord = ord($char);
-	if ($ord == Games::Rezrov::ZConst::ASCII_DEL or
-	    $ord == Games::Rezrov::ZConst::ASCII_BS) {
+	if ($char eq KEY_BACKSPACE or
+	    $ord == Games::Rezrov::ZConst::ASCII_DEL or
+	    $ord == Games::Rezrov::ZConst::ASCII_BS
+	   ) {
 	  my $len = length $result;
 	  if ($len) {
 	    $result = substr($result, 0, --$len);
@@ -332,35 +344,22 @@ sub absolute_move {
 sub init_colors {
   # initialize color support
   my ($self, $options) = @_;
-  my $fg = lc($options->{"fg"});
-  my $bg = lc($options->{"bg"});
-  my $sfg = lc($options->{"sfg"});
-  my $sbg = lc($options->{"sbg"});
 
   if (has_colors()) {
-    $fg = "white" unless $fg;
-    $bg = "blue" unless $bg;
-    foreach ($fg, $bg, $sfg, $sbg) {
+    foreach (map {$self->$_()} qw (fg bg sfg sbg)) {
+      # validate colors
       if ($_ and !exists $COLORMAP{$_}) {
 	$self->fatal_error(sprintf "Unknown color \"%s\"; available colors are %s.\n", $_, join ", ", sort keys %COLORMAP);
       }
     }
     start_color();
-    $self->fg($fg);
-    $self->bg($bg);
-    $self->default_fg($fg);
-    $self->default_bg($bg);
-    $self->do_colors($fg, $bg);
-    if ($sfg and $sbg) {
-      # foreground/background colors for status line
-      $self->sfg($sfg);
-      $self->sbg($sbg);
-      #	init_pair(2, $colormap{$sfg}, $colormap{$sbg});
-      $self->custom_status_colors(1);
-      }
-  } elsif ($fg and $bg) {
+    $self->do_colors($self->fg(), $self->bg());
+  } elsif ($options->{fg} or
+	   $options->{bg} or
+	   $options->{sfg} or
+	   $options->{sbg}) {
     # we specified colors to use, but terminal can't handle color
-    my $message = "Your terminal does not seem to support color.\nIs your TERM variable set correctly?\n";
+    my $message = "You specified colors, but your terminal does not seem to\nsupport color. Is your TERM variable set correctly?\n";
     if ($^O =~ /linux/i) {
       $message .= "You seem to be using Linux; if you are using color_xterm,\nhave you tried setting TERM to \"xterm-color\"?";
     }

@@ -2,30 +2,39 @@ package Games::Rezrov::ZObjectCache;
 
 use strict;
 
-use Games::Rezrov::MethodMaker qw(
-				  names
-				  rooms
-				  items
-				  cache
-				  last_object
-				  last_index
-				 );
+use Games::Rezrov::ZObjectStatus;
+use Games::Rezrov::InlinedPrivateMethod;
 
-use SelfLoader;
+Games::Rezrov::InlinedPrivateMethod->new("-names" =>
+					 [ qw(
+					      _last_object
+					      _last_index
+					      _names
+					      _rooms
+					      _items
+					      _cache
+					     )],
+					);
+#my $code = Games::Rezrov::MagicMethod->new("-manual" => 1);
+#print $$code; die;
 
 1;
 __DATA__
 
+sub last_object {
+  return $_[0]->_last_object();
+}
+
 sub new {
-  my $self = {};
+  my $self = [];
   bless $self, shift;
-  $self->cache([]);
+  $self->_cache([]);
   return $self;
 }
 
 sub load_names {
   my $self = shift;
-  return if $self->names();
+  return if $self->_names();
 
   my $header = Games::Rezrov::StoryFile::header();
   my $max_objects = $header->max_objects();
@@ -35,45 +44,68 @@ sub load_names {
   my (@names, %rooms, %items);
 
   my $i;
+  my $zos;
+  my (%idesc, %rdesc);
   for ($i=1; $i <= $max_objects; $i++) {
     # decode the object table
-    $o = new Games::Rezrov::ZObject($i);
+#    $o = new Games::Rezrov::ZObject($i);
+    $o = $self->get($i);
     $desc = $o->print($ztext);
     if ($$desc =~ /\s{4,}/) {
       # several sequential whitespace characters; consider the end.
       # 3 is not enough for Lurking Horror or AMFV
-      $self->last_object($i - 1);
+      $self->_last_object($i - 1);
 #      print STDERR "$i $$desc\n";
       last;
     } else {
       if (Games::Rezrov::StoryFile::likely_location($desc)) {
 	# this is named like a room but might not be.
 	# examples: proper names (Suspect: "Veronica"),
-	# Zork 3's "Royal Seal of Dimwit Flathead", etc.
-	my $p = $self->get($o->get_parent_id());
-	if ($p and Games::Rezrov::StoryFile::likely_location($p->print())) {
-	  # aha: since this object's parent itself looks like a room,
-	  # don't consider this object a room.
+	# Zork 3's "Royal Seal of Dimwit Flathead",
+	# Enchanter's "Legend of the Great Implementers"
+	$zos = new Games::Rezrov::ZObjectStatus($i, $self);
+	if ($zos->parent_room()) {
+	  # aha: this object has a parent that itself looks like a room;
+	  # consider this an object instead.
+	  #
 	  # example, zork 2:
 	  #
 	  #    Room 8 (196)
 	  #     Frobozz Magic Grue Repellent (22)
 	  # 
-	  # Grue repellent is an item, but is named like rooms are.
+	  # Grue repellent is an item, though it's named like a room.
 	  #  
           $items{$i} = 1;
+	  $idesc{$$desc} = $i;
         } else {
+#	  printf STDERR "%d: %s\n", $i, $$desc if $$desc =~ /veronica/i;
           $rooms{$i} = 1;
+	  $rdesc{$$desc} = $i;
 	}
       } else {
 	# it's almost certainly not a room.
 	$items{$i} = 1;
+	$idesc{$$desc} = $i;
       }
       $names[$i] = $desc;
 #      printf STDERR "%d: %s\n", $i, $$desc;
     }
   }
-  $self->last_object($i - 1) unless $self->last_object();
+  $self->_last_object($i - 1) unless $self->_last_object();
+
+  foreach (keys %rdesc) {
+    # there are cases when multiple objects with a character's name
+    # appear in the object table (e.g. characters from Suspect).
+    # Because these proper names look like location names we can
+    # have trouble identifying them.  Here, if we have evidence that
+    # such a name is really an object (it has a parent room, see above)
+    # discard the "rooms" entry.
+    # 
+    # Critical when trying to teleport to a character's location in Suspect;
+    # without this we teleport into limbo.
+    delete $rooms{$rdesc{$_}} if exists $idesc{$_};
+#      printf STDERR "aha: $_\n";
+  }
 
   if (0) {
     print "Rooms:\n";
@@ -86,29 +118,29 @@ sub load_names {
     }
   }
   
-  $self->names(\@names);
-  $self->rooms(\%rooms);
-  $self->items(\%items);
+  $self->_names(\@names);
+  $self->_rooms(\%rooms);
+  $self->_items(\%items);
 }
 
 sub print {
   # get description for a given item
-  return $_[0]->names()->[$_[1]];
+  return $_[0]->_names()->[$_[1]];
 }
 
 sub get_random {
   # get the name of a random room/item
   my ($self, %options) = @_;
-  my $list = $options{"-room"} ? $self->rooms() : $self->items();
+  my $list = $options{"-room"} ? $self->_rooms() : $self->_items();
   my @list = keys %{$list};
-  my $names = $self->names();
-  my $last_index = $self->last_index() || 0;
+  my $last_index = $self->_last_index();
   my $this_index;
   while (1) {
     $this_index = int(rand(scalar @list));
-    last if $this_index != $last_index;
+    last if !(defined($last_index)) or $this_index != $last_index;
   }
-  return $names->[$list[$this_index]];
+  $self->_last_index($this_index);
+  return $self->_names()->[$list[$this_index]];
 }
 
 sub find {
@@ -117,12 +149,12 @@ sub find {
   # ie "golden canary" matches "golden clockwork canary".
   my ($self, $what, %options) = @_;
   (my $what2 = $what) =~ s/\s+/.*/g;
-  my $names = $self->names();
+  my $names = $self->_names();
   my %hits;
   my $desc;
   my $list;
-  my $rooms = $self->rooms();
-  my $items = $self->items();
+  my $rooms = $self->_rooms();
+  my $items = $self->_items();
   if ($options{"-all"}) {
     $list = { %{$rooms}, %{$items} };
   } elsif ($options{"-room"}) {
@@ -199,7 +231,7 @@ sub find {
 
 sub get {
   # fetch the specified object
-  my $cache = $_[0]->cache();
+  my $cache = $_[0]->_cache();
   if (defined $cache->[$_[1]]) {
 #    printf STDERR "cache hit for %s\n", $_[1];
     return $cache->[$_[1]];
@@ -213,30 +245,33 @@ sub get {
 
 sub get_rooms {
   my $self = shift;
-  my $names = $self->names();
-  my %rooms = map {${$names->[$_]} => 1} keys %{$self->rooms()};
+  my $names = $self->_names();
+  my %rooms = map {${$names->[$_]} => 1} keys %{$self->_rooms()};
   return sort keys %rooms;
 }
 
 sub get_items {
   my $self = shift;
-  my $names = $self->names();
-#  my %items = map {${$names->[$_]} . " ($_)" => 1} keys %{$self->items()};
-  my %items = map {${$names->[$_]} => 1} keys %{$self->items()};
+  my $names = $self->_names();
+  my %items = map {${$names->[$_]} => 1} keys %{$self->_items()};
   return sort keys %items;
 }
 
 sub is_room {
   my ($self, $id) = @_;
-  my $rooms = $self->rooms();
+  my $rooms = $self->_rooms();
   if ($rooms) {
     # we've fully analyzed the object table
     return exists $rooms->{$id};
   } else {
     # guess
-    my $zo = $self->get($id);
-    my $desc = $zo->print();
-    return Games::Rezrov::StoryFile::likely_location($desc);
+    if (my $zo = $self->get($id)) {
+      my $desc = $zo->print();
+      return Games::Rezrov::StoryFile::likely_location($desc);
+    } else {
+      # object 0 or other "invalid" object
+      return undef;
+    }
   }
 }
 

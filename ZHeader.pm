@@ -338,5 +338,15 @@ sub wants_color {
   return Games::Rezrov::StoryFile::get_word_at(FLAGS_2) & WANTS_COLOR ? 1 : 0;
 }
 
+sub fixed_font_forced {
+  # 8.1: fixed-font printing may be forced by the game
+  if ($_[0]->version >= 3) {
+    # see section 10
+    return Games::Rezrov::StoryFile::get_word_at(FLAGS_2) & FORCE_FIXED;
+  } else {
+    return 0;
+  }
+}
+
 
 1;

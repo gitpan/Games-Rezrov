@@ -18,7 +18,7 @@ use Games::Rezrov::ZInterpreter;
 use Games::Rezrov::ZOptions;
 use Games::Rezrov::ZConst;
 
-$main::VERSION = $main::VERSION = '0.16';
+$main::VERSION = $main::VERSION = '0.17';
 # twice to shut up perl -w
 
 my %FLAGS;
@@ -81,8 +81,11 @@ use constant OPTIONS =>
    "playback=s",
    "id=i",
    "tandy",
-   "hack",
+   "hack=i",
    "shameless=i",
+   "force",
+   "checksum",
+   "24h",
   );
 
 unless (GetOptions(\%FLAGS, OPTIONS)) {
@@ -106,6 +109,7 @@ Games::Rezrov::ZOptions::GUESS_TITLE($FLAGS{"no-title"} ? 0 : 1);
 Games::Rezrov::ZOptions::MAXIMUM_SCROLLING($FLAGS{"max-scroll"} ? 1 : 0);
 Games::Rezrov::ZOptions::COUNT_OPCODES($FLAGS{"count-opcodes"} ? 1 : 0);
 Games::Rezrov::ZOptions::WRITE_OPCODES(exists $FLAGS{"debug"} ? $FLAGS{"debug"} || "STDERR" : 0);
+Games::Rezrov::ZOptions::TIME_24(exists $FLAGS{"24h"} ? 1 : 0);
 
 if (exists $FLAGS{"undo"}) {
   Games::Rezrov::ZOptions::EMULATE_UNDO($FLAGS{"undo"});
@@ -178,9 +182,6 @@ my $zio;
 if ($zio_type eq "tk") {
   # GUI interface
   require Games::Rezrov::ZIO_Tk;
-  unless (exists $FLAGS{"max-scroll"}) {
-#    Games::Rezrov::ZOptions::MAXIMUM_SCROLLING(1);
-  }
   $zio = new Games::Rezrov::ZIO_Tk(%FLAGS);
 } elsif ($zio_type eq "win32") {
   # windows console
@@ -229,6 +230,24 @@ sub cont () {
   Games::Rezrov::StoryFile::setup();
   # complete inititialization
 
+  if ($FLAGS{"hack"}) {
+    # cheat development assistance; get operands for a 2OP opcode
+    my $pc = $FLAGS{"hack"};
+    my $opcode = Games::Rezrov::StoryFile::get_byte_at($pc++);
+    die "not 2OP" unless ($opcode & 0x80) == 0;
+    my $mask = 0x40;
+    for (my $i=1; $i<=2; $i++) {
+      my $thing = Games::Rezrov::StoryFile::get_byte_at($pc++);
+      printf "operand %d: %s\n", $i, (($opcode & $mask) == 0) ?
+	"literal $thing" : "get_var($thing)";
+      $mask >>= 1;
+    }
+    exit;
+  } elsif ($FLAGS{"checksum"}) {
+    printf "Game checksum is: %d\n", Games::Rezrov::StoryFile::header()->file_checksum();
+    exit;
+  }
+
   if ($FLAGS{"playback"}) {
     Games::Rezrov::StoryFile::input_stream(Games::Rezrov::ZConst::INPUT_FILE, $FLAGS{"playback"});
   }
@@ -243,20 +262,35 @@ sub tk_validate {
   # called to see if the version of the Tk module available on the system
   # is new enough.
   my $type = shift;
+  my $ok;
   if ($Tk::VERSION >= TK_VERSION_REQUIRED) {
     # OK
-    return 1;
+    $ok = 1;
   } elsif ($type == SPECIFIED) {
     # user specifically asked to use Tk
     die sprintf "I need Tk %s or later, you seem to have version %s.  Pity.\n", TK_VERSION_REQUIRED, $Tk::VERSION;
   } elsif ($type == DETECTING) {
     # just trying to figure out whether we can use Tk; nope!
-    return 0;
+    $ok = 0;
   } else {
     die;
   }
 
-  return 1;
+  if ($ok and
+      $^O !~ /win/i and
+      !$ENV{DISPLAY} and
+      (!exists $FLAGS{"force"})) {
+    # On Unix systems, Tk requires the DISPLAY variable be set.
+    # Even though Tk is installed, the user might not be running X.
+    # Avoid fatal "couldn't connect to display" error message from Tk.
+    if ($type == SPECIFIED) {
+      die "Your DISPLAY variable doesn't seem to be set.\nUse the -force switch if you think you don't need it.\n";
+    } else {
+      $ok = 0;
+    }
+  }
+
+  return $ok;
 }
 
 sub get_interface {
@@ -350,7 +384,10 @@ known as the "z-machine".  Rezrov is a z-code interpreter which can
 run programs written in z-code versions 3 through 5 (nearly complete
 support) and 8 (limited support).
 
-=head1 INTERFACE
+Rezrov's chief distinguishing feature among z-code interpreters is its
+cheat commands.
+
+=head1 INTERFACES
 
 I/O operations have been abstracted to allow the games to be playable
 through any of several front-end interfaces.  Normally rezrov tries to
@@ -563,7 +600,7 @@ While this is just a simple tweak, turning on a particular object
 property, exactly *which* property varies by game and I know of no
 easy way to determine this dynamically, so at present this only works
 in a few games: Zork I, Zork II, Zork III, Zork: The Undiscovered
-Underground, and Infidel (I'm taking requests).
+Underground, Infidel, and Planetfall (I'm taking requests).
 
 =item *
 
@@ -616,6 +653,21 @@ only works in Zork I at present:
 
 =item *
 
+B<lummox>: Removes all practical limitations on the weight and total
+number of items you can carry.  Very game-specific; only works in Zorks
+I-III and Planetfall for now.
+
+=item *
+
+B<systolic>: Lowers your blood pressure in the game "Bureaucracy".  In
+"Bureaucracy," using a word unknown to the game or entering an empty
+line bumps up your character's blood pressure.  A few such missteps
+and you drop dead of a stroke.  Bureaucracy is too effective by half;
+this "feature" alone irritated me so much I never got far in the game.
+This cheat should make the game a little more bearable to play.
+
+=item *
+
 B<lingo>: prints out all the words in the dictionary.
 
 =item *
@@ -626,8 +678,8 @@ tries to decode it as if it were encoded z-characters.  There are a
 lot of hacks here to attempt to filter out junky text.  I put this in
 to try and uncover easter eggs or funny things in games that I'd never
 run into while playing.  For example, here's a little tidbit from Zork
-I that I'd never seen before, probably a message you were never
-supposed to see:
+I that I'd never seen before, probably a message for an "impossible"
+case that you were never supposed to encounter:
 
   It takes a talented person to be killed while already dead. YOU are
   such a talent. Unfortunately, it takes a talented person to deal
@@ -836,6 +888,11 @@ enables support, and "-readline 0" disables it.
 
 =over 4
 
+=item B<-24h>
+
+Displays the game time in "time" games (Deadline, Suspect, etc) in
+24-hour format rather than 12-hour AM/PM format.
+
 =item B<-no-graphics>
 
 Disables usage of the "font 3" character graphics font.  Generally
@@ -916,9 +973,9 @@ interpreter to process a single "look" command:
                             Trinity (version 4):  905 opcodes
  Zork: The Undiscovered Underground (version 5): 2186 opcodes (!)
 
-If you seriously want to *play* these later games, I recommend you use
-an interpreter written in C, such as frotz or zip; these are much
-faster and more accurate than rezrov.
+While rezrov can run most of these games, if you seriously want to
+*play* them I recommend you use an interpreter written in C, such as
+frotz or zip; these are much faster and more accurate than rezrov.
 
 A secondary goal has been to produce a relatively clean,
 compartmentalized implementation of the z-machine that can be read
@@ -1014,17 +1071,20 @@ And lastly, the mighty Implementers:
 
 =head1 BUGS
 
-The interpreter is not fully compliant with the specification in some
-areas.  With that said, I currently know of no flaws that prevent
-version 3 games from being perfectly playable.  Version 4 games (A
-Mind Forever Voyaging, Bureaucracy, Nord and Bert Couldn't Make Head
-or Tail of It, and Trinity) I'm less sure about, this complicated by
-the fact that I haven't completed any of them C<:) > Version 5 games
-(Beyond Zork, Border Zone, Sherlock) seem to work to the limited
-extent I've played them, but there are a few unimplemented opcodes
-that I have yet to see used.  The only version 8 game I've tried has
-been "anchorhead", which runs (but is unbearably slow on my P133).
-YMMV.
+   Bug? Not in a flawless program like this! (Cough, cough).
+                                      - Zork I
+
+While I've tried, the interpreter is not fully compliant with the
+specification in some areas.  With that said, I currently know of no
+flaws that prevent version 3 games from being perfectly playable.
+Version 4 games (A Mind Forever Voyaging, Bureaucracy, Nord and Bert
+Couldn't Make Head or Tail of It, and Trinity) I'm less sure about,
+this complicated by the fact that I haven't completed any of them C<:)>
+Version 5 games (Beyond Zork, Border Zone, Sherlock) seem to work to
+the limited extent I've played them, but there are a few unimplemented
+opcodes that I have yet to see used.  The only version 8 game I've
+tried has been "anchorhead", which runs, but is unbearably slow on my
+P133.  YMMV.
 
 =head1 HELP WANTED
 

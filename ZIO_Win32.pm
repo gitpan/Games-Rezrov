@@ -7,25 +7,22 @@ use strict;
 use Win32::Console;
 
 use Games::Rezrov::ZIO_Generic;
+use Games::Rezrov::ZIO_Color;
 use Games::Rezrov::ZConst;
-use Games::Rezrov::MethodMaker qw(
-			   sfg
-			   sbg
-			   );
 
 use Carp qw(cluck);
 
 use constant DEBUG => 0;
 
-@Games::Rezrov::ZIO_Win32::ISA = qw(Games::Rezrov::ZIO_Generic);
+@Games::Rezrov::ZIO_Win32::ISA = qw(Games::Rezrov::ZIO_Generic
+				    Games::Rezrov::ZIO_Color
+				    );
 
-my $upper_lines;
-# number of lines in upper window
+my ($upper_lines, $rows, $columns, $in_status);
+# number of lines in upper window, geometry
 
 my ($IN, $OUT);
-# win32 instances
-
-my ($rows, $columns);
+# Win32::Console instances
 
 if (DEBUG) {
   # debugging; tough to redirect STDERR under win32 :(
@@ -35,87 +32,59 @@ if (DEBUG) {
   select(STDOUT);
 }
 
-my %FOREGROUND = (
-		  "black" => $main::FG_BLACK,
-		  "blue" => $main::FG_BLUE,
-		  "lightblue" =>$main::FG_LIGHTBLUE,
-		  "red" => $main::FG_RED,
-		  "lightred" => $main::FG_LIGHTRED,
-		  "green" => $main::FG_GREEN,
-		  "lightgreen" => $main::FG_LIGHTGREEN,
-		  "magenta" => $main::FG_MAGENTA,
-		  "lightmagenta" => $main::FG_LIGHTMAGENTA,
-		  "cyan" => $main::FG_CYAN,
-		  "lightcyan" => $main::FG_LIGHTCYAN,
-		  "brown" => $main::FG_BROWN,
-		  "yellow" => $main::FG_YELLOW,
-		  "gray" => $main::FG_GRAY,
-		  "white" => $main::FG_WHITE
-		 );
+my %KEYCODES = (
+		38 => Games::Rezrov::ZConst::Z_UP,
+		40 => Games::Rezrov::ZConst::Z_DOWN,
+		37 => Games::Rezrov::ZConst::Z_LEFT,
+		39 => Games::Rezrov::ZConst::Z_RIGHT,
+		);
 
-my %BACKGROUND = (
-		  "black" => $main::BG_BLACK,
-		  "blue" => $main::BG_BLUE,
-		  "lightblue" =>$main::BG_LIGHTBLUE,
-		  "red" => $main::BG_RED,
-		  "lightred" => $main::BG_LIGHTRED,
-		  "green" => $main::BG_GREEN,
-		  "lightgreen" => $main::BG_LIGHTGREEN,
-		  "magenta" => $main::BG_MAGENTA,
-		  "lightmagenta" => $main::BG_LIGHTMAGENTA,
-		  "cyan" => $main::BG_CYAN,
-		  "lightcyan" => $main::BG_LIGHTCYAN,
-		  "brown" => $main::BG_BROWN,
-		  "yellow" => $main::BG_YELLOW,
-		  "gray" => $main::BG_GRAY,
-		  "white" => $main::BG_WHITE
-		 );
-
-my %BOLD = (
-	    "black" => "gray",
-	    "blue" => "lightblue",
-	    "red" => "lightred",
-	    "green" => "lightgreen",
-	    "magenta" => "lightmagenta",
-	    "cyan" => "lightcyan",
-	    "brown" => "yellow",
-	    "gray" => "white",
-	    "yellow" => "white",
-	    "white" => "white",
-	   );
-
-#my ($NORMAL, $REVERSE, $BOLD, $STATUS);
-#my $current_attr;
-my $in_status;
+my (%FOREGROUND, %BACKGROUND);
+foreach (qw(black
+	    blue
+	    lightblue
+	    red
+	    lightred
+	    green
+	    lightgreen
+	    magenta
+	    lightmagenta
+	    cyan
+	    lightcyan
+	    brown
+	    yellow
+	    gray
+	    white)) {
+    # make hash translating names to color codes exported by Win32::Console
+    no strict "refs";
+    $FOREGROUND{$_} = ${"main::FG_" . uc($_)};
+    $BACKGROUND{$_} = ${"main::BG_" . uc($_)};
+}
 
 sub new {
     my ($type, %options) = @_;
     my $self = new Games::Rezrov::ZIO_Generic();
     bless $self, $type;
 
-    if ($options{"fg"} and $options{"bg"}) {
-	foreach ("bg", "fg", "sfg", "sbg") {
-	    next unless exists $options{$_};
-	    my $c = lc($options{$_});
-	    unless (exists $FOREGROUND{$c}) {
-		die sprintf "Unknown color \"%s\"; available colors: %s\n", $c, join ", ", sort keys %FOREGROUND;
-	    }
-	}
-	$self->fg($options{"fg"});
-	$self->bg($options{"bg"});
-	if ($options{"sfg"} and $options{"sbg"}) {
-	    $self->sfg($options{"sfg"});
-	    $self->sbg($options{"sbg"});
-	} else {
-	    # reverse
-	    $self->sfg($options{"bg"});
-	    $self->sbg($options{"fg"});
-	}
+    if ($options{fg}) {
+	$options{fg} = "gray" if $options{fg} eq "white";
+	# since INTENSITY mode has no effect "white",
+	# use gray instead.  Feh.
+	# How to get *true* bold here???
     } else {
-	$self->fg("gray");
-	$self->bg("blue");
-	$self->sfg("black");
-	$self->sbg("cyan");
+	$options{fg} = "gray" unless $options{fg};
+	$options{bg} = "blue" unless $options{bg};
+	$options{sfg} = "black" unless $options{sfg};
+	$options{sbg} = "cyan" unless $options{sbg};
+    }
+
+    $self->parse_color_options(\%options);
+
+    foreach ("bg", "fg", "sfg", "sbg") {
+      next unless exists $options{$_};
+      my $c = $self->$_() || next;
+      die sprintf "Unknown color \"%s\"; available colors: %s\n", $c, join(", ", sort keys %FOREGROUND)
+	  unless exists $FOREGROUND{$c};
     }
     
     # set up i/o
@@ -198,7 +167,8 @@ sub status_hook {
 
 sub get_input {
     my ($self, $max, $single_char, %options) = @_;
-    $IN->Flush();
+#    $IN->Flush();
+    # don't flush input (allow buffered keystrokes)
     
     my ($start_x, $y) = $OUT->Cursor();
     my $buf = $options{"-preloaded"} || "";
@@ -213,17 +183,8 @@ sub get_input {
 	    $code = $event[5];
 	    if ($code == 0) {
 		# non-character key pressed
-		if ($event[3] == 38) {
-		    $code = Games::Rezrov::ZConst::Z_UP;
-		    $known = 1;
-		} elsif ($event[3] == 40) {
-		    $code = Games::Rezrov::ZConst::Z_DOWN;
-		    $known = 1;
-		} elsif ($event[3] == 37) {
-		    $code = Games::Rezrov::ZConst::Z_LEFT;
-		    $known = 1;
-		} elsif ($event[3] == 39) {
-		    $code = Games::Rezrov::ZConst::Z_RIGHT;
+		if ($KEYCODES{$event[3]}) {
+		    $code = $KEYCODES{$event[3]};
 		    $known = 1;
 		} else {
 		    log_it(sprintf "got unknown non-char: %s", join ",", @event);
@@ -304,22 +265,19 @@ sub get_attr {
 	$fg = $self->sfg();
 	$bg = $self->sbg();
     } else {
-	my $is_reverse = $mask & Games::Rezrov::ZConst::STYLE_REVERSE ? 1 : 0;
-	if ($is_reverse) {
+	if ($mask & Games::Rezrov::ZConst::STYLE_REVERSE) {
 	  $fg = $self->bg();
 	  $bg = $self->fg();
 	} else {
 	  $fg = $self->fg();
 	  $bg = $self->bg();
 	}
-	if ($mask &
-	    (Games::Rezrov::ZConst::STYLE_BOLD|Games::Rezrov::ZConst::STYLE_ITALIC)) {
-	    # bold or italic
-	    $fg = $BOLD{$fg} || $fg;
-#	    $bg = $BOLD{$bg} || $bg;
-	}
     }
-    return $BACKGROUND{$bg} | $FOREGROUND{$fg};
+
+    my $code = $BACKGROUND{$bg} | $FOREGROUND{$fg};
+    $code |= main::FOREGROUND_INTENSITY if 
+	($mask & (Games::Rezrov::ZConst::STYLE_BOLD|Games::Rezrov::ZConst::STYLE_ITALIC));
+    return $code;
 }
 
 sub get_position {

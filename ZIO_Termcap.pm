@@ -252,14 +252,10 @@ sub attr_underline {
 sub set_text_style {
   # sect15.html#set_text_style
   my ($self, $text_style) = @_;
-  if ($text_style == Games::Rezrov::ZConst::STYLE_ROMAN) {
-    # turn off all
-    attr_off();
-  } else {
-    attr_reverse() if ($text_style & Games::Rezrov::ZConst::STYLE_REVERSE);
-    attr_bold() if ($text_style & Games::Rezrov::ZConst::STYLE_BOLD);
-    attr_underline() if ($text_style & Games::Rezrov::ZConst::STYLE_ITALIC);
-  }
+  attr_off();
+  attr_reverse() if ($text_style & Games::Rezrov::ZConst::STYLE_REVERSE);
+  attr_bold() if ($text_style & Games::Rezrov::ZConst::STYLE_BOLD);
+  attr_underline() if ($text_style & Games::Rezrov::ZConst::STYLE_ITALIC);
 }
 
 sub cleanup {

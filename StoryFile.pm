@@ -8,6 +8,7 @@ package Games::Rezrov::StoryFile;
 #  - it's faster not to have to pass $self with every opcode/method call
 #
 # Not pretty, but v5+ games need all the speed they can get.
+# See TPJ #13 for why  :)
 #
 
 use strict;
@@ -35,6 +36,9 @@ use constant FRAME_MAX_LOCAL_VARIABLES => 15;
 use constant FRAME_DUMMY => 0;
 use constant FRAME_PROCEDURE => 1;
 use constant FRAME_FUNCTION => 2;
+
+use constant GV_SCORE => 1;
+# 8.2.3.1: global variable holding game score (v3)
 
 # frame indices:
 use constant FRAME_RPC => 0;
@@ -71,7 +75,8 @@ my $last_savefile;
 my $quetzal;
 my $tailing;
 my $player_object;
-my $first_room;
+my $player_confirmed;
+
 my $current_room;
 my $object_cache;
 my $current_input_stream;
@@ -90,7 +95,7 @@ my $font_3_disabled;
 
 my %alternate_dictionaries;
 
-my @candidate_po;
+my %candidate_po;
 
 $Games::Rezrov::StoryFile::PC = 1;
 # current game PC.
@@ -122,6 +127,8 @@ my ($upper_lines, $lower_lines);
 # HACKS, FIX ME
 
 my $current_frame;
+
+my $lines_read = 0;
 
 my %Z_TRANSLATIONS = (
 		       0x18 => "UP",
@@ -189,6 +196,7 @@ sub store_result {
   # and does not add a new one.   Is that code ever reached?  WTF!
 
 #  printf STDERR "store_result: %s where:%d\n", $_[1], $where;
+#  print STDERR "$where\n";
 
   if ($where == 0) {
     # routine stack: push value
@@ -530,6 +538,7 @@ sub set_variable {
   } elsif ($_[0] <= 15) {
     # local variable
     $current_frame->[FRAME_LOCAL + $_[0] - 1] = UNSIGNED_WORD($_[1]);
+#    printf "set local var %d to %d\n", $_[0], $current_frame->[FRAME_LOCAL + $_[0] - 1];
     # numbered starting at 1, not 0
   } else {
     # global
@@ -539,7 +548,7 @@ sub set_variable {
     set_global_var($_[0], UNSIGNED_WORD($_[1]));
     
     if (Games::Rezrov::ZOptions::EMULATE_NOTIFY() and
-	$_[0] == 1 and
+	$_[0] == GV_SCORE and
 	!$header->is_time_game()) {
       # 8.2.3.1: "2nd" global variable holds score 
       # ("2nd" variable is index #1)
@@ -622,7 +631,6 @@ sub verify {
 
 sub copy_table {
   # sect15.html#copy_table
-  die if ref $_[0];
   my ($first, $second, $size) = @_;
 
   $size = SIGNED_WORD($size);
@@ -659,6 +667,7 @@ sub copy_table {
 sub set_global_var {
   # set a global variable
   set_word_at($global_variable_address + ($_[0] * 2), $_[1]);
+#  printf STDERR "set gv %d to %d\n", @_;
 
   if ($_[0] == 1 and
       Games::Rezrov::ZOptions::EMULATE_NOTIFY() and
@@ -730,8 +739,9 @@ sub setup {
     } else {
       my $width = $zio->string_width($message);
       my ($max_x, $max_y) = $zio->get_pixel_geometry();
-      $zio->absolute_move_pixels(($max_x / 2) - ($width / 2),
-				 $max_y / 2);
+      my $pixel_center = ($max_x / 2) - ($width / 2);
+      my $column = ($pixel_center / $max_x) * $columns;
+      $zio->absolute_move(int($column), int($rows / 2));
       $zio->write_string($message);
     }
     $zio->update();
@@ -767,12 +777,13 @@ sub setup {
   erase_window(-1);
   # collapses the upper window
 
-  if ($zio->can_split() and
-      !$zio->manual_status_line() and
-     $version <= 3) {
-    # in v3, do a bogus split_window(), using the "upper window" 
+  if ($version <= 3 and
+      $zio->can_split() and
+      !$zio->manual_status_line()) {
+    # Centralized management of the status line.
+    # Perform a split_window(), we'll use the "upper window" 
     # for the status line.
-    # this is broken: seastalker!
+    # This is BROKEN: Seastalker is a v3 game that uses the upper window!
     split_window(1);
   }
   
@@ -924,6 +935,7 @@ sub reset_game {
   # init/reset game state
   $Games::Rezrov::StoryFile::PC = 0;
   $call_stack = [];
+  $lines_read = 0;
 
   if ($header->version() == 6) {
     # 5.4: "main" routine
@@ -1030,6 +1042,7 @@ sub get_variable {
     # faster, less readable
     my $tmp = $global_variable_address + (($_[0] - 16) * 2);
     # - 16 = convert to index starting at 0
+#    print STDERR "get gv $_[0]\n";
     return ((vec($Games::Rezrov::StoryFile::STORY_BYTES, $tmp, 8) << 8) +
 	    vec($Games::Rezrov::StoryFile::STORY_BYTES, $tmp + 1, 8));
     # fastest, almost unreadable :(
@@ -1044,8 +1057,8 @@ sub unsigned_word {
 
 sub compare_je {
   # branch if first operand is equal to any of the others
-  die if ref $_[0];
   my $first = shift;
+#  print STDERR "je\n";
   foreach (@_) {
     conditional_jump(1), return if $_ == $first;
   }
@@ -1060,7 +1073,6 @@ sub store_word {
 }
 
 sub store_byte {
-  die if ref $_[0];
   my ($array_address, $byte_index, $value) = @_;
   set_byte_at($array_address + $byte_index, $value);
 }
@@ -1255,20 +1267,15 @@ sub insert_obj {
 #        $self->push_command("look");
       }
     }
-  } else {
-    # record first object moved; sometimes but not always the player
+  }
+
+  unless ($player_confirmed) {
+#  unless ($player_confirmed or $push_command) {
+    # record object movements to determine which is the "player"
     # object, aka "cretin"  :)
-      
-    # hack exceptions: "Tip" Seastalker, and "stool" for LGOP...
-#    my $desc = $o->print($ztext);
-#    if ($$desc eq "Tip" or $$desc eq "stool") {
-#      print STDERR "Gilligan!\n";
-#    } else {
-#      $player_object = $object;
-#      $first_room = $destination_obj;
-#      $current_room = $destination_obj;
-      push @candidate_po, [ $object, $destination_obj ];
-#    }
+    if ($object_cache->is_room($destination_obj)) {
+      $candidate_po{$lines_read}{$object} = $destination_obj;
+    }
   }
 
   if (Games::Rezrov::ZOptions::SNOOP_OBJECTS()) {
@@ -1411,26 +1418,75 @@ sub read_line {
   my $token_address = $argv->[1] || 0;
   my $time = 0;
   my $routine = 0;
+  $lines_read++;
 
-  if (@candidate_po) {
+  if (%candidate_po) {
     # we have possible candidates for the player object.
-    my @ok;
-    foreach (@candidate_po) {
-      my ($pid, $dest) = @{$_};
-      my $zs = new Games::Rezrov::ZObjectStatus($pid, $object_cache);
-#      printf "yow -- %s: %s\n", $pid, $zs->is_toplevel_child();
-      my $desc = $object_cache->get($pid)->print();
-      if ($zs->is_toplevel_child()) {
-	# this disambiguates the player in ZTUU
-	next if $$desc eq "stool";
-	# hack for LGOP
-	push @ok, $_;
+    # 
+    # ZTUU: 1st move, 2 items moved to player, player moved to room
+    # LGOP: "stool" and "it" (player) both moved to same room
+    # SeaStalker: don't even get me started [FIX ME]...
+    #
+    # - checking for a toplevel child works
+    my %seen;
+    my %dest;
+    my @turns = (sort {$a <=> $b} keys %candidate_po);
+    # move through turns sequentially
+
+    foreach my $turn (@turns) {
+      while (my ($pid, $dest) = each %{$candidate_po{$turn}}) {
+#	printf STDERR "Turn %d; %s => %s\n", $turn, $pid, $dest;
+#	my $zs = new Games::Rezrov::ZObjectStatus($pid, $object_cache);
+	#	printf "yow -- %s: \"%s\"\n", $pid, $zs->is_toplevel_child();
+#	next unless $zs->is_toplevel_child();
+	# this disambiguates the player in ZTUU, but doesn't work for
+	# seastalker [toplevel child detection broken because of
+	# wacky case in location names]
+	$seen{$pid}++;
+	$dest{$pid} = $dest;
+	# the most recent destination
       }
     }
-    my $which = @ok ? $ok[0] : $candidate_po[0];
-    $player_object = $which->[0];
-    $first_room = $current_room = $which->[1];
-    @candidate_po = ();
+
+    if ($version <= 3) {
+      my $current_room = get_global_var(0);
+      # 8.2.2.1
+      my @candidates = grep {$dest{$_} == $current_room} keys %dest;
+      if (@candidates == 1) {
+	# in version 3 games, the current room is stored in global
+	# variable 0.  If only one object moved to that target, that's it.
+	$player_object = $candidates[0];
+	$player_confirmed = 1;
+#	print STDERR "v3 confirmed: player is $player_object\n";
+      }
+    }
+
+    unless ($player_confirmed) {
+      my @ok = grep {$seen{$_} > 1} keys %seen;
+      if (@ok == 1) {
+	# exactly one object was observed moving multiple turns
+	$player_object = $ok[0];
+#	print STDERR "confirmed: player is $player_object \n";
+	$player_confirmed = 1;
+      } elsif (keys %seen == 1) {
+	# in many games, the first object moved is the player.
+	# Temporarily consider this the player until confirmation;
+	# allows us to teleport even as the first move of the game.
+	#
+	# not true in: LGOP, ZTUU, etc...
+	$player_object = (keys %seen)[0];
+#	print STDERR "candidate po: $player_object \n";
+      } else {
+	#      printf STDERR "failed: %d (%s) %d (%s)\n", scalar keys %seen, (join ",", keys %seen), scalar @ok, join(",", @ok);
+      }
+    }
+
+    %candidate_po = () if $player_confirmed;
+      
+    delete $candidate_po{shift @turns} if @turns > 3;
+    # remove tracking for oldest turns
+
+    $current_room = $dest{$player_object} if $player_object;
   }
   
   my $max_text_length = get_byte_at($text_address);
@@ -1494,7 +1550,7 @@ sub read_line {
     #
     if (!$game_title and $player_object) {
       # delay submitting the "version" command until an object has been
-      # moved; this necessary for game that read a line before the real
+      # moved; this necessary for games that read a line before the real
       # parser starts.  Example: Leather Goddesses of Phobos.
       # Doesn't work: AMFV
       if ($zdict->get_dictionary_address("version")) {
@@ -1677,10 +1733,25 @@ sub display_status_line {
   my $zio = screen_zio();
   return unless $zio->can_split();
   $zstatus->update();
-
+  my $right_chunk;
+  if ($zstatus->time_game()) {
+    my $hours = $zstatus->hours();
+    if (Games::Rezrov::ZOptions::TIME_24()) {
+      $right_chunk = sprintf("Time: %d:%02d%s", $hours,
+			     $zstatus->minutes());
+    } else {
+      $right_chunk = sprintf("Time: %d:%02d%s",
+			     ($hours > 12 ? $hours - 12 : $hours),
+			     $zstatus->minutes(),
+			     ($hours < 12 ? "am" : "pm"));
+    }
+  } else {
+    $right_chunk = sprintf "Score:%d  Moves:%d", $zstatus->score(), $zstatus->moves();
+  }
+  
   if ($zio->manual_status_line()) {
     # the ZIO wants to handle it
-    $zio->status_hook($zstatus);
+    $zio->status_hook($zstatus->location(), $right_chunk);
   } else {
     # "generic" status line handling; broken for screen-splitting v3 games
     my $restore = $zio->get_position(1);
@@ -1689,21 +1760,7 @@ sub display_status_line {
     # erase
     $zio->write_string($zstatus->location(), 0, 0);
     
-    if ($zstatus->time_game()) {
-      my $hours = $zstatus->hours();
-      my $minutes = $zstatus->minutes();
-      my $style = $hours < 12 ? "AM" : "PM";
-      $zio->write_string(sprintf("Time: %d:%02d%s",
-				 ($hours > 12 ? $hours - 12 : $hours),
-				 $minutes, $style),
-			 $columns - 14, 0);
-    } else {
-      my $score = $zstatus->score();
-      my $moves = $zstatus->moves();
-      my $buf = length($score) + length($moves);
-      $zio->write_string("Score:" . $score . "  Moves:" . $moves,
-			 $columns - $buf - 14, 0);
-    }
+    $zio->write_string($right_chunk, $columns - length($right_chunk), 0);
     $zio->status_hook(1);
     &$restore();
   }
@@ -1722,7 +1779,6 @@ sub print_addr {
 }
 
 sub random {
-  die if ref $_[0];
   my $value = shift;
   # return a random number between 1 and specified number.
   # With arg 0, seed random number generator, return 0
@@ -2003,6 +2059,9 @@ sub restore {
       newline();
     }
   }
+  $last_score = get_global_var(GV_SCORE);
+  # for NOTIFY emulation not to get confused after restore
+
   if ($version <= 3) {
     conditional_jump($success);
   } elsif ($version == 4) {
@@ -2090,12 +2149,13 @@ sub snide_message {
 sub save_undo {
   # v5+, save to RAM
   # BROKEN
-  if (1) {
+  if (0) {
     my $undo_data = $quetzal->save("", "-undo" => 1);
 #    print "saved $undo_data\n";
     $undo_slots = [ $undo_data ];
     store_result(1);
   } else {
+    # not supported
     store_result(-1);
   }
 }
@@ -2103,7 +2163,7 @@ sub save_undo {
 sub restore_undo {
   # v5+, restore from RAM
   # BROKEN
-  if (1) {
+  if (0) {
 #    print "restoring " . $undo_slots->[0] . "\n";
     my $status = @{$undo_slots} ? $quetzal->restore("", pop @{$undo_slots}) : 0;
     store_result($status);
@@ -2187,30 +2247,31 @@ sub set_font {
 }
 
 sub set_color {
-  die if ref $_[0];
   my ($fg, $bg, $win) = @_;
   die sprintf("v6; fix me! %s", join ",", @_) if defined $win;
   my $zio = screen_zio();
   flush();
-  foreach ([ $fg, 'fg' ],
-	   [ $bg, 'bg' ]) {
-    my ($color_code, $method) = @{$_};
-    if ($color_code == Games::Rezrov::ZConst::COLOR_CURRENT) {
-      # nop?
-      print STDERR "set color to current; huh?\n";
-    } elsif ($color_code == Games::Rezrov::ZConst::COLOR_DEFAULT) {
-      my $m2 = 'default_' . $method;
-      $zio->$method($zio->$m2());
-    } elsif (my $name = Games::Rezrov::ZConst::color_code_to_name($color_code)) {
-      $zio->$method($name);
-      #      printf STDERR "set %s to %s\n", $method, $name;
-    } else {
-      die "set_color(): eek, " . $color_code;
+  if ($zio->can_use_color()) {
+    foreach ([ $fg, 'fg' ],
+	     [ $bg, 'bg' ]) {
+      my ($color_code, $method) = @{$_};
+      if ($color_code == Games::Rezrov::ZConst::COLOR_CURRENT) {
+	# nop?
+	print STDERR "set color to current; huh?\n";
+      } elsif ($color_code == Games::Rezrov::ZConst::COLOR_DEFAULT) {
+	my $m2 = 'default_' . $method;
+	$zio->$method($zio->$m2());
+      } elsif (my $name = Games::Rezrov::ZConst::color_code_to_name($color_code)) {
+	$zio->$method($name);
+	#      printf STDERR "set %s to %s\n", $method, $name;
+      } else {
+	die "set_color(): eek, " . $color_code;
+      }
     }
+    $zio->color_change_notify();
   }
-  $zio->color_change_notify();
 }
-
+  
 sub fatal_error {
   my $zio = screen_zio();
   $zio->newline();
@@ -2223,13 +2284,12 @@ sub split_window {
 
   $upper_lines = $lines;
   $lower_lines = $rows - $lines;
-#  print STDERR "ll=$lower_lines ul=$upper_lines\n";
-#  cluck "split_window to $lines\n";
+#  print STDERR "split_window to $lines, ll=$lower_lines ul=$upper_lines\n";
 
   my ($x, $y) = $zio->get_position();
-  if ($y <= $upper_lines) {
+  if ($y < $upper_lines) {
     # 8.7.2.2
-    $zio->absolute_move($x, $upper_lines + 1);
+    $zio->absolute_move($x, $upper_lines);
   }
   screen_zio()->split_window($lines);
   # any local housekeeping
@@ -2280,7 +2340,15 @@ sub font_mask {
     if $current_window == Games::Rezrov::ZConst::UPPER_WIN;
   # 8.7.2.4:
   # An interpreter should use a fixed-pitch font when printing on the
-  # upper window. 
+  # upper window.
+
+  if (0 and $header and $header->fixed_font_forced()) {
+    # 8.1: game forcing use of fixed-width font
+    # DISABLED: something seems to be wrong here...
+    # photopia (all v5 games?) turn on this bit after 1 move?
+    $fm2 |= Games::Rezrov::ZConst::STYLE_FIXED;
+  }
+
   return $fm2;
 }
 
@@ -2485,6 +2553,10 @@ sub likely_location {
     #   You have:   <---------
     #   A leaflet
 
+    return 0 if $buffer =~ /^\w - /;
+    # sampler1_r55.z3:
+    # T - The Tutorial
+
     unless ($buffer =~ /[a-z]/) {
       # if all uppercase...
       return 0 if $buffer =~ /[^\w ]/;
@@ -2541,7 +2613,6 @@ sub likely_location {
 }
 
 sub tokenize {
-  die if ref $_[0];
   my ($text, $parse, $dict, $flag) = @_;
 
   my $std_dictionary_addr = $header->dictionary_address();
@@ -2585,8 +2656,10 @@ sub rows {
 
 sub columns {
   if (defined $_[0]) {
+    # ZIO notifies us of its columns
     $columns = $_[0];
     $header->set_columns($_[0]) if $header;
+    display_status_line() if $version <= 3 and $zstatus;
   }
   return $columns;
 }
@@ -2602,20 +2675,25 @@ sub get_pc {
 
 sub clear_screen {
   my $zio = screen_zio();
-  my $fg = $zio->fg() || "";
-  my $bg = $zio->bg() || "";
-  my $dbg = $zio->default_bg() || "";
-  # FIX ME!
-
-#  printf STDERR "fg=%s/%s bg=%s/%s\n",$fg,$zio->default_fg, $bg, $zio->default_bg;
-  if ($bg ne $dbg) {
-    # the background color has changed; change the cursor color
-    # to the current foreground color so we don't run the risk of it 
-    # "disappearing".
-    $zio->cc($fg);
+  
+  if ($zio->can_use_color()) {
+    my $fg = $zio->fg() || "";
+    my $bg = $zio->bg() || "";
+    my $dbg = $zio->default_bg() || "";
+    # FIX ME!
+    
+    #  printf STDERR "fg=%s/%s bg=%s/%s\n",$fg,$zio->default_fg, $bg, $zio->default_bg;
+    if ($bg ne $dbg) {
+      # the background color has changed; change the cursor color
+      # to the current foreground color so we don't run the risk of it 
+      # "disappearing".
+      $zio->cc($fg);
+    }
+    $zio->default_bg($bg);
+    $zio->default_fg($fg);
+    $zio->set_background_color();
   }
-  $zio->default_bg($bg);
-  $zio->default_fg($fg);
+
   $zio->clear_screen();
 }
 
@@ -2642,6 +2720,7 @@ sub is_this_game {
 
 sub get_global_var {
   # get the specified global variable
+#  printf STDERR "get gv %d: %d\n", $_[0], get_word_at($global_variable_address + ($_[0] * 2));
   return get_word_at($global_variable_address + ($_[0] * 2));
 }
 

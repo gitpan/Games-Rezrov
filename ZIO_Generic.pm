@@ -8,12 +8,6 @@ use Games::Rezrov::ZIO_Tools;
 use Games::Rezrov::ZConst;
 use Games::Rezrov::MethodMaker qw(
 			   current_window
-
-			   cc
-			   fg
-			   bg
-			   default_fg
-			   default_bg
 			  );
 
 my $buffer = "";
@@ -119,5 +113,17 @@ sub fatal_error {
   $self->cleanup();
   exit 1;
 }
+
+sub set_background_color {
+  # set the background to the current background color.
+  # That's the *whole* background, not just for the next characters
+  # to print (some games switch background colors before clearing
+  # the screen, which should reset the entire background to that
+  # color); eg "photopia.z5".
+  #
+  # "That's the *whole* bass..."
+  1;
+}
+
 
 1;

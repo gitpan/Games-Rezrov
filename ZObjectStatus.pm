@@ -38,7 +38,7 @@ sub new {
     last unless defined $zo;
     my $oid = $zo->object_id();
     $self->in_inventory(1) if $oid == $pid;
-    if ($object_cache->is_room($oid)) {
+    if ($levels and $object_cache->is_room($oid)) {
       $self->in_current_room(1) if ($oid == $current_room);
       $self->parent_room($zo);
       $self->toplevel_child($last);
