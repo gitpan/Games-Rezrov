@@ -16,8 +16,9 @@ ZIO_Tools.pm
 ZIO_Tk.pm
 ZIO_Curses.pm
 ZIO_Win32.pm
-ZIO_dumb.pm
 ZIO_Termcap.pm
+ZIO_dumb.pm
+ZIO_test.pm
 ZInterpreter.pm
 ZObject.pm
 ZObjectCache.pm
@@ -36,3 +37,4 @@ ZIO_Color.pm
 InlinedPrivateMethod.pm
 manual_install.pl
 Speech.pm
+META.yml                                 Module meta-data (added by MakeMaker)

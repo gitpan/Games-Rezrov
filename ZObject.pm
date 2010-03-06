@@ -164,13 +164,13 @@ sub get_property {
   my $pc = $_[0]->_property_cache();
   if ($zp = $pc->{$_[1]}) {
 #    printf STDERR "cache hit\n";
-    return $zp;
   } else {
     $zp = new Games::Rezrov::ZProperty($_[1], $_[0], $_[0]->_property_start_index());
     $pc->{$_[1]} = $zp;
 #    print STDERR "\n";
-    return $zp;
   }
+
+  return $zp;
 }
 
 sub remove {

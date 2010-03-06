@@ -27,17 +27,22 @@ use Games::Rezrov::MethodMaker ([],
 			    last_random
  
                             dictionary_fully_decoded
+
+                            bp_cheat_data
 			   ));
 
 use constant OMAP_START_INDENT => 1;
 use constant OMAP_INDENT_STEP => 3;
 
-use constant WWW_BROWSER_EXES => qw(netscape mozilla phoenix firebird);
+use constant WWW_BROWSER_EXES => qw(firefox netscape mozilla phoenix firebird);
 # add more executables here
 
 use constant ZORK_1 => ("Zork I", 88, "840726", 41257);
 use constant ZORK_2 => ("Zork II", 48, "840904", 55449);
 use constant ZORK_3 => ("Zork III", 17, "840727", 11898);
+use constant ENCHANTER => ("Enchanter", 29, "860820", 9543);
+use constant SORCERER => ("Sorcerer", 15, "851108", 10467);
+use constant SPELLBREAKER => ("Spellbreaker", 87, "860904", 2524);
 use constant INFIDEL => ("Infidel", 22, "830916", 16674);
 use constant ZTUU => ("Zork: The Undiscovered Underground", 16, 970828, 4485);
 use constant PLANETFALL => ("Planetfall", 37, "851003", 726);
@@ -163,6 +168,19 @@ use constant BASTE_MESSAGES => (
 				 "Mmm, %s."
 				);
 
+use constant VOLUMINUS_SELF_MESSAGES => (
+					  "You're pretty full of yourself already.",
+					  "You're pretty full of it already.",
+					 );
+
+use constant VOLUMINUS_MESSAGES => (
+				     "The interior of the %s seems to recede away from you.",
+				    );
+
+use constant VOLUMINUS_CLOSED_MESSAGES => (
+					    "The %s seems to bulge for a moment."
+					   );
+
 use constant GO_BACK_TO_X => (
 			      "New York",
 			      "San Francisco",
@@ -174,6 +192,18 @@ use constant WWW_HELP_MESSAGES => (
     "Perhaps your plea will be heard."
 );
 
+use constant ANGIOTENSIN_MESSAGES => (
+	"It looks suspiciously like a children's vitamin.",
+	"Use caution when driving, operating machinery, or performing other hazardous activities.",
+	"Side effects may include dizziness or rash.",
+	);
+
+use constant CANT_FIND_YOU_YET_MESSAGES => (
+	"Sorry, I haven't got my bearings just yet; try again in a few moves.",
+	"Move around a little first so I can lock on to your signal...",
+	"Take a few steps first so I can triangulate your signal...",
+	);
+
 use constant SPEECH_ENABLED_MESSAGES => (
 					 "Speech output enabled.",
 					 "Hello.",
@@ -182,6 +212,13 @@ use constant SPEECH_ENABLED_MESSAGES => (
 					 "Altitude! Altitude!",
 					 "Dough Re Mi Fa So La Ti Dough..."
 					);
+
+use constant GMACHO_MESSAGES => (
+				 "While your spellbook remains closed, its pages seem to rustle for a moment.",
+				 "For a moment you could swear your spellbook was glowing with a faint blue glow.",
+				);
+
+use constant PLENTY_O_ROOM => 32000;
 
 %Games::Rezrov::ZDict::MAGIC_WORDS = map {$_ => 1} (
 						    "pilfer",
@@ -198,6 +235,7 @@ use constant SPEECH_ENABLED_MESSAGES => (
 						    "bickle",
 						    "tail",
 						    "#sa",
+						    "#sp",
 						    "#dta",
 						    "#dat", "spiel",
 						    "#sprop",
@@ -211,6 +249,13 @@ use constant SPEECH_ENABLED_MESSAGES => (
 						    "systolic",
 						    "vilify",
 						    "baste", "nosh",
+						    "voluminus",
+#						    "compartmentalize",
+						    "angiotensin",
+
+						    "gmacho",
+
+						    "verdelivre",
 						   );
 
 %Games::Rezrov::ZDict::ALIASES = (
@@ -323,6 +368,7 @@ sub tokenize_line {
     # move pointer past length of entered text.
   }
   my $raw_input = Games::Rezrov::StoryFile::get_string_at($text_p, $text_len);
+#  print STDERR "raw: $raw_input\n";
 
   my $text_end = $text_p + $text_len;
   # we're passed the length because in <= v4 we would have to count
@@ -346,7 +392,7 @@ sub tokenize_line {
       $c = chr(Games::Rezrov::StoryFile::get_byte_at($text_p++));
       if ($c eq ' ') {
 	# a space character:
-	if ($token) {
+	if ($token ne "") {
 	  # token is completed
 	  $token_done = 1;
 	} else {
@@ -357,7 +403,7 @@ sub tokenize_line {
 	# hit a game-specific token separator
 #	print STDERR "separator: $c\n";
 	$token_done = 1;
-	if ($token) {
+	if ($token ne "") {
 	  # a token is already built; use it, and move
 	  # text pointer back one so we'll make a new token
 	  # out of this separator
@@ -372,7 +418,8 @@ sub tokenize_line {
       }
     }
     if ($token_done) {
-      push @tokens, [ $token, $start_offset - $text_address ] if $token;
+#      push @tokens, [ $token, $start_offset - $text_address ] if $token;
+      push @tokens, [ $token, $start_offset - $text_address ] if $token ne "";
       $token = "";
       $token_done = $start_offset = 0;
     }
@@ -704,12 +751,17 @@ sub magic {
     $self->dump_objects(3);
   } elsif ($token eq "#serials") {
     my $header = Games::Rezrov::StoryFile::header();
+    $self->write_text(sprintf "Z-machine version %d, ",
+		      Games::Rezrov::StoryFile::version());
     $self->write_text(sprintf "release %s, ", $header->release_number());
     $self->write_text(sprintf "serial number %s, ", $header->serial_code());
     $self->write_text(sprintf "checksum %s.", $header->file_checksum());
   } elsif ($token eq "systolic") {
     # lower blood pressure (Bureaucracy only)
     $self->systolic();
+  } elsif ($token eq "angiotensin") {
+    # take blood pressure regulating medication (Bureaucracy only)
+    $self->medicate();
   } elsif ($token eq "lummox") {
     # remove restrictions on weight and number of items that can be carried
     $self->lummox();
@@ -751,6 +803,14 @@ sub magic {
     $self->teleport($what);
   } elsif ($token eq "baste" or $token eq "nosh") {
     $self->baste($token, $what);
+  } elsif ($token eq "voluminus") {
+    $self->voluminus($token, $what);
+  } elsif ($token eq "gmacho") {
+    $self->gmacho($token, $what);
+  } elsif ($token eq "verdelivre") {
+    $self->bookworm($token, $what);
+#  } elsif ($token eq "compartmentalize") {
+#    $self->compartmentalize($token, $what);
   } elsif ($token eq "vilify") {
     $Games::Rezrov::IGNORE_PROPERTY_ERRORS = 1;
     $self->vilify($what);
@@ -762,6 +822,8 @@ sub magic {
     $self->tail($what);
   } elsif ($token eq "#sa") {
     $self->set_attr($what);
+  } elsif ($token eq "#sp") {
+    $self->set_property($what);
   } elsif ($token eq "#dta") {
     $self->decode_text_at($what);
   } elsif ($token eq "#dat" or $token eq "spiel") {
@@ -808,7 +870,7 @@ sub magic {
 	#
 	my $proceed = 0;
 	if (!$player_object or !Games::Rezrov::StoryFile::current_room()) {
-	  $self->write_text("Sorry, I'm a little disoriented right now...");
+	  $self->write_text("Sorry, I haven't got my bearings just yet.  Maybe you could walk around a little and try again.");
 	} elsif ($zstat->is_player()) {
 	  if ($desc eq "cretin") {
 	    $self->write_text("\"cretin\" suits you, I see.");
@@ -1070,7 +1132,7 @@ sub teleport {
   if (!$where) {
     $self->write_text("Where to?");
   } elsif (!$player_object) {
-    $self->write_text("Sorry, I haven't got my bearings just yet; try again in a few moves.");
+    $self->write_text($self->random_message(CANT_FIND_YOU_YET_MESSAGES));
   } else {
     my $object_cache = $self->get_object_cache();
     my @hits = $object_cache->find($where, "-room" => 1);
@@ -1277,7 +1339,7 @@ sub support_check {
     }
   }
   # failed, complain:
-  $self->write_text(sprintf "Sorry, this trick only currently works in the following game%s:", scalar @list == 1 ? "" : "s");
+  $self->write_text(sprintf "Sorry, this trickery only currently works in the following game%s:", scalar @list == 1 ? "" : "s");
   foreach (@list) {
     $self->newline();
     $self->write_text(sprintf "  - %s (release %d, serial number %s, checksum %s)", @{$_});
@@ -1520,7 +1582,22 @@ sub set_attr {
     }
     $self->write_text("Duly tweaked.");
   } else {
-    $self->write_text("Specify object ID, property ID, state");
+    $self->write_text("Specify object ID, attribute ID, state (0=clear, 1=set)");
+  }
+}
+
+sub set_property {
+  #
+  # cheat command: set an object's property to a specified value
+  #
+  my ($self, $what) = @_;
+  my @stuff = split /\s+/, $what;
+  if (@stuff == 3) {
+    my ($oid, $property, $value) = @stuff;
+    Games::Rezrov::StoryFile::put_property($oid, $property, $value);
+    $self->write_text("Duly tweaked.");
+  } else {
+    $self->write_text("Specify object ID, property ID, value");
   }
 }
 
@@ -1927,6 +2004,41 @@ sub systolic {
   }
 }
 
+sub medicate {
+  # cheat command: manage blood pressure (bureaucracy only)
+  my $self = shift;
+  my @SUPPORTED_GAMES = (
+			 [ BUREAUCRACY, 232, 32082 ]
+			);
+
+  if (my ($var, $value) = $self->support_check(@SUPPORTED_GAMES)) {
+    my $data = $self->bp_cheat_data();
+    my $doses = 1;
+    if ($data) {
+      $doses = $data->[0] + 1;
+    }
+    $self->bp_cheat_data([$doses, $var, $value]);
+
+    if ($doses > 2) {
+      $self->write_text("While your blood pressure medication is tantalizingly candylike, you've had enough.");
+    } else {
+      my $msg = "You pop a generic angiotensin-II receptor antagonist. " . $self->random_message(ANGIOTENSIN_MESSAGES);
+      $self->write_text($msg);
+    }
+  }
+}
+
+sub blood_pressure_cheat_hook {
+  # cheat: automatically manage blood pressure in "Bureaucracy"
+  my ($self) = @_;
+  my $ref = $self->bp_cheat_data();
+  if ($ref) {
+    # active
+    my ($doses, $var, $value) = @{$ref};
+    Games::Rezrov::StoryFile::set_global_var($var, $value);
+  }
+}
+
 sub vilify {
   # cheat command --
   # make an object attackable.
@@ -2068,42 +2180,45 @@ sub correct_typos {
   #    i.e. "mailbax" should be corrected to "mailbox", but token is "mailbo"
   #  - deletion with irrelevant last token letter:
   #    "malbox" should be "mailbo"
+  #    => do an object lookup?
 
   my ($self, $line) = @_;
   my $raw_line = $line;
-
-  my $new_line;
-
   chomp $line;
-  my @words = split /\s+/, $line;
-  # HACK: doesn't follow the tokenization rules in tokenize_line().
-  # Direct queries to my associate, Dr. Sosumi.
-
-  my @new_words;
 
   $self->decode_dictionary();
-  my $words = $self->decoded_by_word();
-  my $encoded_length = $self->encoded_word_length();
-  my @all_words = keys %{$words};
 
-  my $token;
+  my %words = %{$self->decoded_by_word()};
+  foreach (keys %Games::Rezrov::ZDict::MAGIC_WORDS) {
+    # use a copy of the dictionary so we can add cheat verbs to the
+    # list of known words
+    $words{$_} = 1;
+  }
+
+  my $encoded_length = $self->encoded_word_length();
+  my @all_words = keys %words;
+
   my $i;
-  my $word;
   my @subs;
 
-  foreach $word (@words) {
-    $token = lc($word);
+  my $zoc = Games::Rezrov::StoryFile::get_zobject_cache();
+  $zoc->load_names();
+  # ugh
+
+  my $correct_word = sub {
+    # attempt to typo-correct a given word; must return word
+    # (original or changed).
+    my ($word) = @_;
+    my $new_word = $word;
+    my $token = lc($word);
     $token = substr($token,0,$encoded_length)
       if length($token) > $encoded_length;
     my $tlen = length($token);
-    my $new_word;
-    if (length($word) < 3) {
-      # too short
-      push @new_words, $word;
-    } elsif (exists $words->{$token}) {
-      # OK
-      push @new_words, $word;
-    } else {
+    unless (length($word) < 3 or exists $words{$token} or $word =~ /^#/) {
+      # attempt correction unless:
+      #  - word is too short
+      #  - word is already in dictionary
+      #  - word begins with a cheat/debug prefix ("#")	    
       my (@sub_hits, @trans_hits, @del_hits, @ins_hits);
 
       #
@@ -2115,7 +2230,7 @@ sub correct_typos {
 	  $try .= substr($token, $j, 1) unless $j == $i;
 	}
 #	print "$token $try\n";
-	push @ins_hits, $try if exists $words->{$try};
+	push @ins_hits, $try if exists $words{$try};
       }
 
       #
@@ -2142,7 +2257,7 @@ sub correct_typos {
 	my $save = substr($try, $i, 1);
 	substr($try,$i,1) = substr($token,$i + 1,1);
 	substr($try,$i+1,1) = $save;
-	push @trans_hits, $try if exists $words->{$try};
+	push @trans_hits, $try if exists $words{$try};
       }
 
       #
@@ -2155,22 +2270,63 @@ sub correct_typos {
 	push @sub_hits, @hits if @hits;
       }
 
-      $new_word = $word;
       foreach (\@trans_hits, \@del_hits, \@ins_hits, \@sub_hits) {
 	$new_word = $_->[0], last if @{$_};
       }
 
-      push @new_words, $new_word;
-
       if ($word ne $new_word) {
+	#
+	# correction found
+	#
+
+	if (length($new_word) == $encoded_length) {
+	  # word might be truncated! e.g. in Zork I:
+	  #
+	  #    - user enters "leaflwt"
+	  #    - actual word is "leaflet"
+	  #    - dictionary entry is truncated to 6 characters, "leafle".
+	  #
+	  # ...this is ugly because the corrected word is printed
+	  # to the screen.  Look for matches for the corrected word in
+	  # the object database, using that object's description if it
+	  # matches.
+
+	  my @hits = $zoc->find($new_word);
+	  if (@hits == 1) {
+	    my $desc = $zoc->print($hits[0]->[0]);
+	    if (index(lc($$desc), lc($new_word)) == 0) {
+	      # require a perfect match; too strict?
+	      # in Zork I, "mailbox" object lookup returns "small mailbox",
+	      # which works, but I'm not certain other typos would do as well.
+#	      printf STDERR "%s => %s => %s\n", $word, $new_word, $$desc;
+	      $new_word = $$desc;
+	      # huzzah
+	    }
+	  }
+	}
+
 	push @subs, [ $word, $new_word ];
       }
     }
-  }
+
+#    print STDERR "word: $new_word\n";
+    return $new_word;
+  };
+
+#  $line =~ s/(\w+)/&$correct_word($1)/eg;
+  # NO: excludes cheat commands
+#  $line =~ s/(\S+)/&$correct_word($1)/eg;
+  # NO: includes punctuation
+
+  $line =~ s/([\#\w]+)/&$correct_word($1)/eg;
+
+#  print STDERR "corrected: $line\n";
+  # HACK: doesn't follow the tokenization rules in tokenize_line().
+  # Direct queries to my associate, Dr. Sosumi.
 
   my $msg = "";
   if (@subs) {
-    $new_line = join " ", @new_words;
+    # something was corrected
     $msg = '[Assuming you meant ';
     for ($i=0; $i < @subs; $i++) {
       if ($i > 0) {
@@ -2180,13 +2336,261 @@ sub correct_typos {
       $msg .= sprintf '"%s" instead of "%s"', $subs[$i]->[1], $subs[$i]->[0];
     }
     $msg .= '.]';
-  } else {
-    # if nothing done, return untouched line just in case
-    # something important about tokenization, etc.
-    $new_line = $raw_line;
   }
 
-  return ($new_line, $msg);
+  return ($line, $msg);
+}
+
+sub gmacho {
+  # cheat command --
+  # move any spell to your scrollbook (Enchanter series)
+  my ($self, $token, $what, %options) = @_;
+
+  my $quiet = $options{"-quiet"};
+
+  unless ($what) {
+    $self->write_text(sprintf "%s what?", ucfirst(lc($token)));
+    return 0;
+  }
+
+  my @SUPPORTED_GAMES = (
+			 [ ENCHANTER, 4 ],
+			 [ SORCERER, 7 ],
+			 [ SPELLBREAKER, 0 ],
+			 # attribute determining whether object is a spell.
+			 # don't know how this works in Spellbreaker;
+			 # looks like it "should" be attr 18, but doesn't work!
+			);
+
+  my @attributes = $self->support_check(@SUPPORTED_GAMES);
+  return 0 unless @attributes;
+
+  my $spell_attr = $attributes[0];
+
+  my $object_cache = $self->get_object_cache();
+
+  my @hits = $object_cache->find("spell book");
+  unless (@hits == 1) {
+    $self->write_text("Hmm, I can't seem to find your spell book.") unless $quiet;
+    return 0;
+  }
+  my $spellbook_id = $hits[0]->[0];
+  
+  my @try = $what;
+  unless ($what =~ / spell$/i) {
+    push @try, $what . " spell";
+  }
+
+  my $found;
+  my $worked = 0;
+  foreach my $try (@try) {
+    @hits = $object_cache->find($try);
+    if (@hits == 1) {
+      # found desired spell
+      $found = 1;
+      my $spell_id = $hits[0]->[0];
+      
+      my $usable = 1;
+      my $zo = $object_cache->get($spell_id);
+
+      if ($spell_attr) {
+	# we know how to test if the requested object is a spell
+	my $zp = $zo->get_property($attributes[0]);
+	$usable = $zp->property_exists();
+      } 
+
+      if ($usable) {
+	my $parent = $zo->get_parent();
+	if ($parent and $parent->object_id() == $spellbook_id) {
+	  # spell is already in spell book
+	  my $thing = $what;
+	  $thing =~ s/\s+.*//;
+	  $self->write_text("Great idea, Berzio, if only the $thing spell weren't already in your spellbook.") unless $quiet;
+	} else {
+	  $self->move_object($spell_id, $spellbook_id);
+	  $self->write_text($self->random_message(GMACHO_MESSAGES)) unless $quiet;
+	  $worked = 1;
+	}
+      } else {
+	$self->write_text("That doesn't appear to be a spell.") unless $quiet;
+      }
+      last;
+    }
+  }
+  $self->write_text("I can't find that spell, if that is a spell.") unless $found or $quiet;
+  return $worked;
+}
+
+sub voluminus {
+  # cheat command --
+  # expand the capacity of a container object.
+  #
+  # BTW, it's not that I don't know how to spell "voluminous".
+  # I'm just a grown man who's read all the Harry Potter books.
+
+  my ($self, $token, $what) = @_;
+  my @SUPPORTED_GAMES = (
+			 [ ZORK_1, 19, 11, 10 ],
+			 # 0 = game ID
+			 # 1 = attribute # for whether object is a container
+			 # 2 = attribute # for whether container is open
+			 # 3 = property # for container capacity
+			);
+
+  my @attributes = $self->support_check(@SUPPORTED_GAMES);
+  return unless @attributes;
+  my ($attr_container, $attr_container_open, $property_capacity) = @attributes;
+  
+  unless ($what) {
+    $self->write_text("Voluminus what?");
+  } else {
+    # given an object
+    my $object_cache = $self->get_object_cache();
+    my @hits = $object_cache->find($what);
+    if (@hits == 1) {
+      # just right
+      my $id = $hits[0]->[0];
+      my $zo = $object_cache->get($id);
+      my $zstat = new Games::Rezrov::ZObjectStatus($id,
+						   $object_cache);
+      my $proceed = 0;
+      my $msg;
+      if ($zstat->is_player()) {
+	$msg = $self->random_message(VOLUMINUS_SELF_MESSAGES);
+      } elsif ($zstat->in_current_room()) {
+	if ($zo->test_attr($attr_container)) {
+	  # is the specified object a container?
+	  $proceed = 1;
+	  if ($zo->test_attr($attr_container_open)) {
+	    $msg = $self->random_message(VOLUMINUS_MESSAGES);
+	  } else {
+	    $msg = $self->random_message(VOLUMINUS_CLOSED_MESSAGES);
+	  }
+	} else {
+	  # not a container
+	  $msg = "It's difficult to see how the %s could hold more, given that it can't hold anything.";
+	}
+      } else {
+	$msg = sprintf "I don't see any %s here!", $what;
+      }
+
+      if ($msg) {
+	my $desc = $zo->print();
+	$self->write_text(sprintf $msg, $$desc);
+      }
+
+      if ($proceed) {
+	Games::Rezrov::StoryFile::put_property($id, $property_capacity, PLENTY_O_ROOM);
+      }
+    } elsif (@hits > 1) {
+      # too many
+      $self->write_text(sprintf 'Hmm, which do you mean: %s?',
+			 nice_list(sort map {$_->[1]} @hits));
+    } else {
+      # no matches
+      $self->write_text("What's that?");
+    }
+  }
+}
+
+sub compartmentalize {
+  # cheat command --
+  # make an object into a container.
+  # *** doesn't seem to work: non-containers seem to be missing required capacity property.
+
+  my ($self, $token, $what) = @_;
+  my $PLENTY_O_ROOM = 32000;
+  my @SUPPORTED_GAMES = (
+			 [ ZORK_1, 19, 11, 10 ],
+			 # 0 = game ID
+			 # 1 = attribute # for whether object is a container
+			 # 2 = attribute # for whether container is open
+			 # 3 = property # for container capacity
+			);
+
+  my @attributes = $self->support_check(@SUPPORTED_GAMES);
+  return unless @attributes;
+  my ($attr_container, $attr_container_open, $property_capacity) = @attributes;
+  
+  unless ($what) {
+    $self->write_text("Compartmentalize what?");
+  } else {
+    # given an object
+    my $object_cache = $self->get_object_cache();
+    my @hits = $object_cache->find($what);
+    if (@hits == 1) {
+      # just right
+      my $id = $hits[0]->[0];
+      my $zo = $object_cache->get($id);
+      my $zstat = new Games::Rezrov::ZObjectStatus($id,
+						   $object_cache);
+      my $proceed = 0;
+      my $msg;
+      if ($zstat->is_player()) {
+	$msg = $self->random_message(VOLUMINUS_SELF_MESSAGES);
+      } elsif ($zstat->in_current_room()) {
+	$proceed = 1;
+	$msg = $self->random_message("compartmentalize test");
+      } else {
+	$msg = sprintf "I don't see any %s here!", $what;
+      }
+
+      if ($msg) {
+	my $desc = $zo->print();
+	$self->write_text(sprintf $msg, $$desc);
+      }
+
+      if ($proceed) {
+	Games::Rezrov::StoryFile::set_attr($id, $attr_container);
+	Games::Rezrov::StoryFile::set_attr($id, $attr_container_open);
+	Games::Rezrov::StoryFile::put_property($id, $property_capacity, PLENTY_O_ROOM);
+      }
+    } elsif (@hits > 1) {
+      # too many
+      $self->write_text(sprintf 'Hmm, which do you mean: %s?',
+			 nice_list(sort map {$_->[1]} @hits));
+    } else {
+      # no matches
+      $self->write_text("What's that?");
+    }
+  }
+}
+
+sub bookworm  {
+  # cheat command --
+  # move all game spells to your scrollbook (Enchanter series)
+  my ($self, $token, $what, %options) = @_;
+
+  my @SUPPORTED_GAMES = (
+			 [ ENCHANTER, 4 ],
+			 [ SORCERER, 7 ],
+			 [ SPELLBREAKER, 0],
+			 # - attribute determining whether object is a spell
+			);
+
+  my @attributes = $self->support_check(@SUPPORTED_GAMES);
+  return unless @attributes;
+
+  my $object_cache = $self->get_object_cache();
+  my @hits = $object_cache->find(" spell");
+  
+  if (@hits) {
+    my $imported = 0;
+    foreach my $ref (@hits) {
+      next unless $ref->[1] =~ / spell$/i;
+#      printf "DEBUG: %s\n", $ref->[1];
+      $imported += $self->gmacho("gmacho", $ref->[1], "-quiet" => 1);
+    }
+    if ($imported) {
+      $self->write_text("Your spellbook spins in the air, its pages flapping wildly!");
+    } else {
+      $self->write_text("Your spellbook twitches feebly.");
+    }
+  } else {
+    $self->write_text("Sorry, I couldn't find any spells.");
+  }
+
+
 }
 
 1;

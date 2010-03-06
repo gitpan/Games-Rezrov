@@ -77,6 +77,7 @@ sub set_version {
   $w_main->title("rezrov");
   $w_main->bind('<Configure>' => [ $self => 'set_geometry' ]);
   $w_main->bind('<Control-c>' => [ $self => 'cleanup' ]);
+#  $w_main->bind('<Tab>' => [ $self => 'i_am_too_dumb_to_figure_this_out' ]);
 
   my $is_win32 = ($^O =~ /mswin32/i) ? 1 : 0;
   my ($DEFAULT_VARIABLE_FAMILY, $DEFAULT_FONT_SIZE);
@@ -665,6 +666,11 @@ sub get_input {
       $key = $_[0];
       $supplied = 1;
     }
+
+    $w_main->break() if $key == 9;
+    # simple fix for weird tab key handler crash.
+    # Duh.  Thanks, Oliver.
+
     if ($key == Games::Rezrov::ZConst::ASCII_CR or
 	$key == Games::Rezrov::ZConst::ASCII_LF) {
       $done = 1;
@@ -688,6 +694,7 @@ sub get_input {
     } else {
       printf STDERR "unhandled key code %d (%s)\n", $key, chr($key) if $key;
 #      $buffer .= $key;
+#      $buffer .= chr($key);
     }
     if ($single_char) {
       $done = 1;
@@ -722,6 +729,7 @@ sub get_input {
   $self->cursor_off();
   $self->blink_init(1);
   $self->bind_keys_to(sub {});
+
   return $buffer;
 }
 
@@ -733,6 +741,7 @@ sub bind_keys_to {
   $w_main->bind("<Any-Up>" => [ $callback => Games::Rezrov::ZConst::Z_UP ]);
   $w_main->bind("<Any-Left>" => [ $callback => Games::Rezrov::ZConst::Z_LEFT ]);
   $w_main->bind("<Any-Right>" => [ $callback => Games::Rezrov::ZConst::Z_RIGHT ]);
+
 }
 
 sub clear_to_eol {
@@ -881,7 +890,8 @@ sub set_geometry {
 
   my $old_y = $self->get_y();
 
-  $rows = $cy / $lh;
+  my $old_rows = $rows;
+  $rows = int($cy / $lh);
   widget_setup();
   my $columns = int($cx / $self->fixed_font_width());
 #  printf STDERR "set_geometry: cx:%d cy:%d lh:%d geometry: %dx%d\n", $cx, $cy, $self->line_height(), $columns, $rows;
@@ -889,8 +899,13 @@ sub set_geometry {
   Games::Rezrov::StoryFile::rows($rows);
   Games::Rezrov::StoryFile::columns($columns);
 
-  $abs_row = $rows if ($old_y > $cy);
-  # if window is now smaller than where cursor was last
+  # if window is now smaller than where cursor was last, scroll the window up and then correct the cursor row
+  if ($abs_row >= $rows) {
+    my ($save_col, $save_x) = ($abs_col, $abs_x);
+    $self->newline for $rows .. $old_rows - 1;
+    ($abs_col, $abs_x, $abs_row) = ($save_col, $save_x, $rows - 1);
+  }
+
 }
 
 sub biggest_metric {
@@ -936,6 +951,45 @@ sub column_list {
 sub get_y {
   # translate current row into a pixel position
   return $Y_BORDER + ($abs_row * $_[0]->line_height());
+}
+
+sub i_am_too_dumb_to_figure_this_out {
+    # 9/2004:
+    # Pressing the "Tab" key wreaks havoc...once pressed, program 
+    # seems to think every subsequent keypress is also a tab key!
+    # Maybe some queue needs to be flushed?  I dunno.
+
+    # Anyway, we could:
+    #  - instead of binding "Any-KeyPress" we could bind all the individual
+    #    keys EXCEPT the tab key.  I think this would work, but there are
+    #    an awful lot of symbols to bind and I'm sure I'll forget some.
+    #  - unbind the tab key.  Can't get this to work (undef, " ").
+    #  - bind the tab key to a null sub.  Works temporarily, but
+    #    somehow subsequent Any-Keypress binds seem to override it!
+    #  - cop out (this subroutine)
+
+    my $msg = "I hate the tab key in Tk";
+    if (1) {
+	*Tk::Error = sub {};
+	# trash the error handler to keep this quiet.
+	die $msg;
+	# unless we die() the tab event seems to cause the (queueing?) lockup.
+    } else {
+	# aborted attempt to save/restore the original Tk handler.
+	# seems to work once, but tab key then causes lockups.
+	unless ($Games::Rezrov::ZIO_Tk::ORIG_TK_HANDLER) {
+	    $Games::Rezrov::ZIO_Tk::ORIG_TK_HANDLER = \&Tk::Error;
+	}
+	my $restore_sub = sub {
+	    no warnings;
+	    *Tk::Error = $Games::Rezrov::ZIO_Tk::ORIG_TK_HANDLER;
+	    $w_main->bind("<Bogus>" => sub {});
+	    # test whether original handler is restored
+	};
+	$w_main->after(100, $restore_sub);
+	*Tk::Error = sub {};
+	die $msg;
+    }
 }
 
 1;

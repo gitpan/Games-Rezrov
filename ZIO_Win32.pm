@@ -1,6 +1,9 @@
 package Games::Rezrov::ZIO_Win32;
 # z-machine i/o for perls with Win32::Console
 # TO DO:
+# - handle scrollbars/buffering properly...it would be nice
+#   if old game text could be seen via an existing scrollbar.
+#   But this requires untangling screen Size() mess.
 # - can we set hourglass when busy?
 
 use strict;
@@ -23,6 +26,8 @@ my ($upper_lines, $rows, $columns, $in_status);
 
 my ($IN, $OUT);
 # Win32::Console instances
+
+my @ORIG_SIZE;
 
 if (DEBUG) {
   # debugging; tough to redirect STDERR under win32 :(
@@ -90,10 +95,39 @@ sub new {
     # set up i/o
     $IN = new Win32::Console(STD_INPUT_HANDLE);
     $OUT = new Win32::Console(STD_OUTPUT_HANDLE);
+
+    @ORIG_SIZE = $OUT->Size();
+    # save original buffer geometry to restore on exit
+
+    my ($top_row, $bottom_row, $left_col, $right_col);
+    ($columns, $left_col, $top_row, $right_col, $bottom_row) = ($OUT->Info())[0,5,6,7,8];
+#    die $bottom_row;
+    my $visible_rows = ($bottom_row - $top_row) + 1;
+    my $visible_columns = ($right_col - $left_col) + 1;
+
+    $OUT->Size($visible_columns, $visible_rows);
+    # 11/2004: set the screen buffer to be the same size as the visible area
+    # of the window.  Has the effect of removing any scrollbars, etc.
+    #
+    # Under XP the default number of rows in the buffer is generally
+    # larger than the number of visible rows (under Windows 98
+    # the two were generally the same).  So without this change we'd be 
+    # drawing the status window and/or upper window lines somewhere
+    # way up in the buffer, which won't be visible...this is because
+    # the Cursor() method moves within the *buffer* rather than the
+    # visible area.
+    #
+    # It's probably possible to finesse this module to only draw to
+    # the visible area while leaving the buffers and scrollbars
+    # alone, but for now I Don't Care.
     
     my @size = $OUT->Size();
-    $columns = $options{"-columns"} || $size[0] || die "need columns!";
-    $rows = $options{"-rows"} || $size[1] || die "need rows!";
+    $columns = $options{"columns"} || $size[0] || die "need columns!";
+    $rows = $options{"rows"} || $size[1] || die "need rows!";
+
+    $OUT->Size($columns, $rows);
+    # resize again (possible user override limiting rows/cols)
+
     $upper_lines = 0;
     return $self;
 }
@@ -298,6 +332,11 @@ sub get_position {
   } else {
     return ($x, $y);
   }
+}
+
+sub cleanup {
+    $OUT->Size(@ORIG_SIZE) if $OUT;
+    # restore original window buffer sizes
 }
 
 1;

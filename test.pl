@@ -11,20 +11,18 @@ use Games::Rezrov::StoryFile;
 use Games::Rezrov::ZInterpreter;
 use Games::Rezrov::ZOptions;
 use Games::Rezrov::ZConst;
-use Games::Rezrov::ZIO_dumb;
+use Games::Rezrov::ZIO_test;
 
 my $storyfile = "minizork.z3";
 
 die sprintf 'File "%s" does not exist.' . "\n", $storyfile
   unless (-f $storyfile);
 
-my $zio = new Games::Rezrov::ZIO_dumb(
-				      "columns" => 80, "rows" => 25
-# HACK: dumb interface will die if it can't detect size
-# (under win32, or in a CPAN tester's tty-less cron job)
-				      );
+my $zio = new Games::Rezrov::ZIO_test();
+# hopefully this minimal ZIO will eliminate problems encountered
+# by some CPAN testers in ttyless (i.e. cron) environments
 
-Games::Rezrov::ZOptions::GUESS_TITLE(0) unless $zio->can_change_title();
+Games::Rezrov::ZOptions::GUESS_TITLE(0);
 
 my $story = new Games::Rezrov::StoryFile($storyfile, $zio);
 my $z_version = Games::Rezrov::StoryFile::load(1);

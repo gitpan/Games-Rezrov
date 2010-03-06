@@ -52,6 +52,7 @@ use constant CALL => 1;
 use constant PRINT_PADDR => 2;
 
 my $global_variable_address;
+my $global_variable_word_addr;
 my $header;
 my $prompt_buffer;
 
@@ -132,6 +133,9 @@ my $lines_read = 0;
 
 my $TYPO_NOTIFY;
 
+my $GLOBAL_TEMP_CONTROL;
+my $GLOBAL_TEMP_OFFSET;
+
 my %Z_TRANSLATIONS = (
 		       0x18 => "UP",
 		       0x19 => "DOWN",
@@ -188,7 +192,7 @@ sub call {
   }
 }
 
-sub store_result {
+sub store_result_MV {
   # called by opcodes producing a result (stores it).
   my $where = GET_BYTE();
   # see spec 4.2.2, 4.6.
@@ -221,9 +225,43 @@ sub store_result {
   }
 }
 
-sub conditional_jump {
+sub store_result_GV {
+  # called by opcodes producing a result (stores it).
+  $GLOBAL_TEMP_CONTROL = GET_BYTE();
+  # see spec 4.2.2, 4.6.
+  # zip code handles this in store_operand, and in the case of
+  # variable zero, pushes a new variable onto the stack.
+  # The store_variable() call only SETS the topmost variable,
+  # and does not add a new one.   Is that code ever reached?  WTF!
+
+#  printf STDERR "store_result: %s where:%d\n", $_[1], $GLOBAL_TEMP_CONTROL;
+#  print STDERR "$GLOBAL_TEMP_CONTROL\n";
+
+  if ($GLOBAL_TEMP_CONTROL == 0) {
+    # routine stack: push value
+    # see zmach06e.txt section 7.1 (page 33):
+
+    # A variable number is a byte that indicates a certain variable.
+    # The meaning of a variable number is:
+    #      0: the top of the routine stack;
+    #   1-15: the local variable with that number;
+    # 16-255: the global variable with that number minus 16.
+    
+    # Writing to the variable with number 0 means to push a value onto
+    # the routine stack; reading this variable means pulling a value off.
+    routine_push(UNSIGNED_WORD($_[0]));
+    # make sure the value is cast into unsigned form.
+    # see add() for a lengthy debate on the subject.
+  } else {
+    set_variable($GLOBAL_TEMP_CONTROL, $_[0]);
+    # set_variable does casting for us
+  }
+}
+
+sub conditional_jump_MV {
   # see spec section 4.7, zmach06e.txt section 7.3
   # argument: condition
+  # "my" vars version: prettier, but slower
   my $control = GET_BYTE();
   
   my $offset = $control & 0x3f;
@@ -253,6 +291,41 @@ sub conditional_jump {
     }
   }
 }
+
+sub conditional_jump_GV {
+  # see spec section 4.7, zmach06e.txt section 7.3
+  # argument: condition
+  # global variables version: hideous, but faster? (no "my" variable create/destroy)
+  $GLOBAL_TEMP_CONTROL = GET_BYTE();
+  
+  $GLOBAL_TEMP_OFFSET = $GLOBAL_TEMP_CONTROL & 0x3f;
+  # basic address is six low bits of the first byte.
+  if (($GLOBAL_TEMP_CONTROL & 0x40) == 0) {
+    # if "bit 6" is not set, address consists of the six (low) bits 
+    # of the first byte plus the next 8 bits.
+    $GLOBAL_TEMP_OFFSET = ($GLOBAL_TEMP_OFFSET << 8) + GET_BYTE();
+    if (($GLOBAL_TEMP_OFFSET & 0x2000) > 0) {
+      # if the highest bit (formerly bit 6 of the first byte)
+      # is set...
+      $GLOBAL_TEMP_OFFSET |= 0xc000;
+      # turn on top two bits
+      # FIX ME: EXPLAIN THIS
+    }
+  }
+  
+  if ($GLOBAL_TEMP_CONTROL & 0x80 ? $_[0] : !$_[0]) {
+    # normally, branch occurs when condition is false.
+    # however, if topmost bit is set, jump occurs when condition is true.
+    if ($GLOBAL_TEMP_OFFSET > 1) {
+      # jump
+      jump($GLOBAL_TEMP_OFFSET);
+    } else {
+      # instead of jump, this is a RTRUE (1) or RFALSE (0)
+      ret($GLOBAL_TEMP_OFFSET);
+    }
+  }
+}
+
 
 sub add {
   # signed 16-bit addition
@@ -585,26 +658,6 @@ sub set_variable {
     # indexed starting at 0
 
     set_global_var($_[0], UNSIGNED_WORD($_[1]));
-    
-    if (Games::Rezrov::ZOptions::EMULATE_NOTIFY() and
-	$_[0] == GV_SCORE and
-	!$header->is_time_game()) {
-      # 8.2.3.1: "2nd" global variable holds score 
-      # ("2nd" variable is index #1)
-      my $score = SIGNED_WORD($_[1]);
-      my $diff = $score - $last_score;
-      if ($diff and Games::Rezrov::ZOptions::notifying()) {
-	write_text(sprintf "[Your score just went %s by %d points, for a total of %d.]",
-		   ($diff > 0 ? "up" : "down"),
-		   abs($diff), $score);
-	newline();
-	if ($last_score == 0) {
-	  write_text("[NOTE: you can toggle score notification on or off at any time with the NOTIFY command.]");
-	  newline();
-	}
-      }
-      $last_score = $score;
-    }
   }
 }
 
@@ -722,7 +775,7 @@ sub set_global_var {
   set_word_at($global_variable_address + ($_[0] * 2), $_[1]);
 #  printf STDERR "set gv %d to %d\n", @_;
 
-  if ($_[0] == 1 and
+  if ($_[0] == GV_SCORE and
       Games::Rezrov::ZOptions::EMULATE_NOTIFY() and
       !$header->is_time_game()) {
     # 8.2.3.1: "2nd" global variable holds score 
@@ -761,12 +814,129 @@ sub random {
   store_result($result);
 }
 
+sub get_variable_GV2 {
+  # $_[0]: variable
+  # $_[1]: indirect stack reference mode
+  # global variables version: hideous, but faster? (no "my" variable create/destroy)
+  #
+  # Testing reveals heaviest data access seems to be in the order
+  # local variables, global variables, routine variables.
+  # Re-order to reflect this.
+  #
+  
+  if ($_[0] > 0 and $_[0] <= 15) {
+    # a local variable
+#    print STDERR "get_variable: local\n";
+    return $current_frame->[FRAME_LOCAL + $_[0] - 1];
+    # numbered starting from 1, not 0
+  } elsif ($_[0] != 0) {
+    # a global variable
+#    print STDERR "get_variable: global\n";
+
+    #  disgusting, but possibly faster?
+    #  use a global, avoiding declaration/destruction of $tmp:
+    $GLOBAL_TEMP_OFFSET = $global_variable_address + (($_[0] - 16) * 2);
+    return GET_WORD_AT($GLOBAL_TEMP_OFFSET);
+  } else {
+    # a routine stack variable
+    # section 4.2.2:
+    # pop from top of routine stack
+#    print STDERR "get_variable: routine\n";
+    if ($_[1]) {
+      # indirect stack reference
+      return $current_frame->[$#$current_frame];
+    } else {
+      return routine_pop();
+    }
+  }
+}
+
+sub get_variable_GV3 {
+  # EXPERIMENTAL:
+  # halfway-to-inlinable, except for $_[1]  :/
+  # - also assumes global variable table is on a word boundary,
+  #   which sadly will not work
+
+  # $_[0]: variable
+  # $_[1]: indirect stack reference mode
+  # global variables version: hideous, but faster? (no "my" variable create/destroy)
+  #
+  # Testing reveals heaviest data access seems to be in the order
+  # local variables, global variables, routine variables.
+  # Re-order to reflect this.
+  #
+  
+  return ($_[0] > 0 and $_[0] <= 15) ?
+    $current_frame->[FRAME_LOCAL + $_[0] - 1]
+      # a local variable
+     
+      : (
+
+	 $_[0] != 0 ? 
+	 # a global variable
+#	 vec($Games::Rezrov::StoryFile::STORY_BYTES, ($global_variable_word_addr + $_[0] - 16), 16)
+	 die("this will not work")
+	 :
+	 (
+	  # a routine stack variable
+	  # section 4.2.2:
+	  # pop from top of routine stack
+	  $_[1] ? $current_frame->[$#$current_frame] : routine_pop()
+	 )
+
+	);
+}
+
+sub get_variable_GV4 {
+  # EXPERIMENTAL:
+  # halfway-to-inlinable, except for $_[1]  :/
+
+  # $_[0]: variable
+  # $_[1]: indirect stack reference mode
+  # global variables version: hideous, but faster? (no "my" variable create/destroy)
+  #
+  # Testing reveals heaviest data access seems to be in the order
+  # local variables, global variables, routine variables.
+  # Re-order to reflect this.
+  #
+  
+  return ($_[0] > 0 and $_[0] <= 15) ?
+    $current_frame->[FRAME_LOCAL + $_[0] - 1]
+      # a local variable
+     
+      : (
+
+	 $_[0] != 0 ? 
+	 # a global variable
+#	 vec($Games::Rezrov::StoryFile::STORY_BYTES, ($global_variable_word_addr + $_[0] - 16), 16)
+	 die("this will not work")
+	 :
+	 (
+	  # a routine stack variable
+	  # section 4.2.2:
+	  # pop from top of routine stack
+	  $_[1] ? $current_frame->[$#$current_frame] : routine_pop()
+	 )
+
+	);
+}
+
 
 ';
 
 Games::Rezrov::Inliner::inline(\$INLINE_CODE);
 eval $INLINE_CODE;
 undef $INLINE_CODE;
+
+if (1) {
+  *Games::Rezrov::StoryFile::conditional_jump = \&Games::Rezrov::StoryFile::conditional_jump_GV;
+  *Games::Rezrov::StoryFile::get_variable = \&Games::Rezrov::StoryFile::get_variable_GV2;
+  *Games::Rezrov::StoryFile::store_result = \&Games::Rezrov::StoryFile::store_result_GV;
+} else {
+  *Games::Rezrov::StoryFile::conditional_jump = \&Games::Rezrov::StoryFile::conditional_jump_MV;
+  *Games::Rezrov::StoryFile::get_variable = \&Games::Rezrov::StoryFile::get_variable_MV;
+  *Games::Rezrov::StoryFile::store_result = \&Games::Rezrov::StoryFile::store_result_MV;
+}
 
 1;
 
@@ -922,6 +1092,13 @@ sub load {
     my $zio = screen_zio();
     $header = new Games::Rezrov::ZHeader($zio);
     $global_variable_address = $header->global_variable_address();
+
+    $global_variable_word_addr = int($global_variable_address / 2);
+    # is this always aligned on a word boundary???
+    # NO!  Many games do not.  This won't work, but it would
+    # have been nice to get words via a single vec() of size 16 rather than
+    # two vecs() of size 8 and a shift!
+
     my $static = $header->static_memory_address();
     $dynamic_area = substr($Games::Rezrov::StoryFile::STORY_BYTES, 0, $static);
     #  vec($dynamic_area, 0x50, 8) = 12;
@@ -930,6 +1107,10 @@ sub load {
     
     $version = $header->version();
     $groks_f3 = $zio->groks_font_3();
+
+#    $last_score = 0;
+    # for "NOTIFY" emulation
+    reset_cheats();
   }
 }
 
@@ -1017,11 +1198,23 @@ sub get_string_at {
   return substr($Games::Rezrov::StoryFile::STORY_BYTES, $_[0], $_[1]);
 }
 
+sub reset_cheats {
+  $zdict->bp_cheat_data(0) if $zdict;
+  # reset "angiotensin" cheat (Bureaucracy)
+
+  $last_score = get_global_var(GV_SCORE);
+#  print STDERR "last_score: $last_score\n";
+  # for NOTIFY emulation not to get confused after restore
+  # FIX ME: block off to use only if cheat active and correct game version.
+}
+
 sub reset_game {
   # init/reset game state
   $Games::Rezrov::StoryFile::PC = 0;
   $call_stack = [];
   $lines_read = 0;
+
+  reset_cheats();
 
   if ($header->version() == 6) {
     # 5.4: "main" routine
@@ -1108,9 +1301,10 @@ sub ret {
 }
 
 
-sub get_variable {
+sub get_variable_MV {
   # $_[0]: variable
   # $_[1]: indirect stack reference mode
+  # "my" vars version: prettier, but slower
   if ($_[0] == 0) {
     # section 4.2.2:
     # pop from top of routine stack
@@ -1133,12 +1327,59 @@ sub get_variable {
     # most readable, but slowest
 #    return get_word_at($_[0]->global_variable_address() + (($_[1] - 16) * 2));
     # faster, less readable
+
     my $tmp = $global_variable_address + (($_[0] - 16) * 2);
     # - 16 = convert to index starting at 0
 #    print STDERR "get gv $_[0]\n";
     return ((vec($Games::Rezrov::StoryFile::STORY_BYTES, $tmp, 8) << 8) +
 	    vec($Games::Rezrov::StoryFile::STORY_BYTES, $tmp + 1, 8));
     # fastest, almost unreadable :(
+
+    #
+    # alternate approach:
+    #   disgusting, but possibly faster?
+    #   use a global, avoiding declaration/destruction of $tmp, above
+    #
+
+#    $GLOBAL_TMP = $global_variable_address + (($_[0] - 16) * 2);
+#    return ((vec($Games::Rezrov::StoryFile::STORY_BYTES, $GLOBAL_TMP, 8) << 8) +
+#	    vec($Games::Rezrov::StoryFile::STORY_BYTES, $GLOBAL_TMP + 1, 8));
+
+  }
+}
+
+sub get_variable_GV {
+  # $_[0]: variable
+  # $_[1]: indirect stack reference mode
+  # global variables version: hideous, but faster? (no "my" variable create/destroy)
+  if ($_[0] == 0) {
+    # section 4.2.2:
+    # pop from top of routine stack
+#    print STDERR "get_variable: routine\n";
+    if ($_[1]) {
+      # indirect stack reference
+      return $current_frame->[$#$current_frame];
+    } else {
+      return routine_pop();
+    }
+  } elsif ($_[0] <= 15) {
+    # a local variable
+#    print STDERR "get_variable: local\n";
+    return $current_frame->[FRAME_LOCAL + $_[0] - 1];
+    # numbered starting from 1, not 0
+  } else {
+    # a global variable
+#    print STDERR "get_variable: global\n";
+
+    #
+    #   disgusting, but possibly faster?
+    #   use a global, avoiding declaration/destruction of $tmp:
+    #
+
+    $GLOBAL_TEMP_OFFSET = $global_variable_address + (($_[0] - 16) * 2);
+    return ((vec($Games::Rezrov::StoryFile::STORY_BYTES, $GLOBAL_TEMP_OFFSET, 8) << 8) +
+	    vec($Games::Rezrov::StoryFile::STORY_BYTES, $GLOBAL_TEMP_OFFSET + 1, 8));
+
   }
 }
 
@@ -1442,9 +1683,13 @@ sub print_object {
   # print short name of object (Z-encoded string in object property header)
   my $zobj = get_zobject($_[0]);
   my $highlight = Games::Rezrov::ZOptions::HIGHLIGHT_OBJECTS();
-  set_text_style(Games::Rezrov::ZConst::STYLE_BOLD) if $highlight;
+#  set_text_style(Games::Rezrov::ZConst::STYLE_BOLD) if $highlight;
+  my $old;
+  $old = swap_text_style(Games::Rezrov::ZConst::STYLE_BOLD) if $highlight;
   write_zchunk($zobj->print($ztext));
-  set_text_style(Games::Rezrov::ZConst::STYLE_ROMAN) if $highlight;
+#  set_text_style(Games::Rezrov::ZConst::STYLE_ROMAN) if $highlight;
+  toggle_text_style($old) if $highlight;
+
 }
 
 sub get_parent {
@@ -1594,6 +1839,9 @@ sub read_line {
     $time = $argv->[2];
     $routine = $argv->[3];
   }
+
+  $zdict->blood_pressure_cheat_hook();
+  # hack
   
   flush();
   # flush any buffered output before the prompt.
@@ -2133,8 +2381,8 @@ sub write_zchar {
       # 
       #  Game transcript
       #
-      my $fh = $zios->[Games::Rezrov::ZConst::STREAM_TRANSCRIPT];
-      print $fh ($_[1] == Games::Rezrov::ZConst::Z_NEWLINE ? $/ : chr($_[0]));
+      my $fh = $zios->[Games::Rezrov::ZConst::STREAM_TRANSCRIPT];	
+      print $fh (($_[0] || 0) == Games::Rezrov::ZConst::Z_NEWLINE) ? ($\ || "\n") : chr($_[0]);
     }
   }
 }
@@ -2158,7 +2406,10 @@ sub restore {
       newline();
     }
   }
-  $last_score = get_global_var(GV_SCORE);
+
+  reset_cheats();
+
+#  $last_score = get_global_var(GV_SCORE);
   # for NOTIFY emulation not to get confused after restore
 
   if ($version <= 3) {
@@ -2437,6 +2688,10 @@ sub set_buffering {
   $buffering = $_[0] == 1;
 }
 
+# font_mask() or font_mask(newmask)
+#   specifying newmask replaces the current font mask
+# In either case, the returned mask is fudged a bit (for example, STYLE_FIXED is coerced if we're the upper window).
+
 sub font_mask {
   $fm = $_[0] if defined $_[0];
   my $fm2 = $fm || 0;
@@ -2457,6 +2712,8 @@ sub font_mask {
 }
 
 sub set_text_style {
+  # sets the specified style bits on the font, *unless* the value
+  # STYLE_ROMAN is specified in which case all style bits are cleared.
   my $text_style = $_[0];
   flush();
   my $mask = font_mask();
@@ -2470,6 +2727,30 @@ sub set_text_style {
   # might be modified for upper window
   
   screen_zio()->set_text_style($mask);
+  return $mask;
+}
+
+sub toggle_text_style {
+  # toggle the specified style bits on the font. Rather pointless for
+  # STYLE_ROMAN.  Little more than XOR.
+  my $text_style = $_[0];
+  flush();
+  set_text_style( font_mask( font_mask() ^ $text_style ) );
+}
+
+# 'swap' in the specified style bits.
+# Returns the bits that were actually changed.
+#
+# The idea is to be able to do this:
+# $tmp = swap_text_style( STYLE_FIXED );
+# print_fixed_width_text();
+# toggle_text_style($tmp);
+#
+# and not worry about whether or not the relevant style bit was already set
+# (if it was, the bit will be 0 in the return and so the toggle won't undo it)
+sub swap_text_style {
+  my $old = font_mask();
+  return $old ^ set_text_style(@_);  
 }
 
 sub register_newline {
@@ -2492,11 +2773,13 @@ sub register_newline {
     
     set_cursor($lower_lines, 1);
     my $more_prompt = "[MORE]";
-    my $old = font_mask();
-    set_text_style(Games::Rezrov::ZConst::STYLE_REVERSE);
+#    my $old = font_mask();
+#    set_text_style(Games::Rezrov::ZConst::STYLE_REVERSE);
+    my $old = swap_text_style(Games::Rezrov::ZConst::STYLE_REVERSE);
     $zio->write_string($more_prompt);
-    set_text_style(Games::Rezrov::ZConst::STYLE_ROMAN);
-    font_mask($old);
+#    set_text_style(Games::Rezrov::ZConst::STYLE_ROMAN);
+#    font_mask($old);
+    toggle_text_style($old);
     $zio->update();
     $zio->get_input(1,1);
     set_cursor($lower_lines, 1);
@@ -2532,10 +2815,12 @@ sub flush {
   if (Games::Rezrov::ZOptions::BEAUTIFY_LOCATIONS() and
       $version < 4 and
       likely_location(\$buffer)) {
-    set_text_style(Games::Rezrov::ZConst::STYLE_BOLD);
+    #    set_text_style(Games::Rezrov::ZConst::STYLE_BOLD);
+    my $old = swap_text_style(Games::Rezrov::ZConst::STYLE_BOLD); 
     $zio->write_string($buffer);
     # FIX ME: this might wrap; eg Tk, "Zork III: The Dungeon Master"
-    set_text_style(Games::Rezrov::ZConst::STYLE_ROMAN);
+    # set_text_style(Games::Rezrov::ZConst::STYLE_ROMAN);
+    toggle_text_style($old);
   } elsif (length $buffer) {
     $wrote_something = 1;
     my ($i, $have_left);
@@ -2746,14 +3031,17 @@ sub tokenize {
 }
 
 sub get_zobject {
-  if (1) {
-    # cache object requests; games seem to run about 5-10% faster,
-    # the most gain seen in earlier games
-    return $object_cache->get($_[0]);
-  } else {
-    # create every time; slow overhead
-    return new Games::Rezrov::ZObject($_[0]);
-  }
+  # cache object requests; games seem to run about 5-10% faster,
+  # the most gain seen in earlier games
+  return $object_cache->get($_[0]);
+
+  # create every time; slow overhead
+#  return new Games::Rezrov::ZObject($_[0]);
+}
+
+sub get_zobject_cache {
+    # you don't see this
+    return $object_cache;
 }
 
 sub rows {

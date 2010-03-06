@@ -491,6 +491,9 @@ $generic_opcodes[OP_EXT] = \@ext_ops;
     $zio->newline();
     $zio->update();
     $zio->get_input(1,1);
+    # this emulates the behavior of the old Infocom MS-DOS interpreter.
+    # IMO a message and a pause is nice for GUIs which would be destroyed
+    # (e.g. Tk), first giving the user a chance to see any final text.
   }
 
   $zio->set_game_title(" ") if Games::Rezrov::StoryFile::game_title();

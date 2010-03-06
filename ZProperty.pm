@@ -49,13 +49,25 @@ sub get_value {
   if ($_[0]->_property_exists()) {
     # this object provides this property
     my $len = $_[0]->_property_len();
+    my $v;
     if ($len == 2) {
-      return GET_WORD_AT($_[0]->_property_offset());
+      $v = GET_WORD_AT($_[0]->_property_offset());
     } elsif ($len == 1) {
-      return GET_BYTE_AT($_[0]->_property_offset());
+      $v = GET_BYTE_AT($_[0]->_property_offset());
     } else {
       die "get_value() called on long property";
     }
+
+    if (Games::Rezrov::ZOptions::SNOOP_PROPERTIES()) {
+      printf STDERR "[get property %s of %s (%s) = %s (size=%d)\n",
+	$_[0]->property_number(),
+	  $_[0]->_zobj()->object_id(),
+	    ${$_[0]->_zobj()->print()},
+	      $v,
+		$len;
+  }
+
+    return $v;
   } else {
     # object does not provide this property: get default value
     return $_[0]->get_default_value();
@@ -182,7 +194,7 @@ sub set_value {
     my $len = $self->_property_len();
     my $offset = $self->_property_offset();
     if (Games::Rezrov::ZOptions::SNOOP_PROPERTIES()) {
-      Games::Rezrov::StoryFile::write_text(sprintf("[set value of property %d of %s (%s) = %d]",
+      Games::Rezrov::StoryFile::write_text(sprintf("[set property %d of %s (%s) = %d]",
 					   $self->_property_number(),
 					   $self->_zobj()->object_id(),
 					   ${$self->_zobj()->print()},

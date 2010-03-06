@@ -2,6 +2,10 @@ package Games::Rezrov::ZIO_Generic;
 #
 # shared/skeleton z-machine i/o, options, and speech
 #
+# FIX ME: provide abstract stub methods which die() w/message
+#         requiring implementation
+#
+
 use strict;
 
 use Games::Rezrov::ZIO_Tools;

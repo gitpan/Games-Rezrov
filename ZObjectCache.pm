@@ -51,11 +51,13 @@ sub load_names {
 #    $o = new Games::Rezrov::ZObject($i);
     $o = $self->get($i);
     $desc = $o->print($ztext);
-    if ($$desc =~ /\s{4,}/) {
+#    if ($$desc =~ /\s{4,}/) {
+    if ($$desc =~ /\s{5,}/) {
       # several sequential whitespace characters; consider the end.
       # 3 is not enough for Lurking Horror or AMFV
+      # 4 is not enough for Sorcerer
       $self->_last_object($i - 1);
-#      print STDERR "$i $$desc\n";
+#     print STDERR "DEBUG: stopping obj table detection at index $i $$desc\n";
       last;
     } else {
       if (Games::Rezrov::StoryFile::likely_location($desc)) {
@@ -155,6 +157,7 @@ sub find {
   my $list;
   my $rooms = $self->_rooms();
   my $items = $self->_items();
+
   if ($options{"-all"}) {
     $list = { %{$rooms}, %{$items} };
   } elsif ($options{"-room"}) {
@@ -169,7 +172,7 @@ sub find {
     next if $desc =~ /^\d/;
     # begins with a number, ignore --
     # zork 1, #82: "2m cbroken clockwork canary"
-    
+
     if ($desc =~ /$what/i or $desc =~ /$what2/i) {
       if (exists $hits{$desc}) {
 	# try to resolve duplicate names; give preference to objects

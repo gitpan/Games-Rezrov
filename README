@@ -16,11 +16,37 @@ DESCRIPTION
 
 COPYRIGHT
 
- Copyright (c) 1998-2004 Michael Edmonson <edmonson@sdf.lonestar.org>.
+ Copyright (c) 1998-(1900+(localtime)[5]) 
+   Michael Edmonson <mnedmonson@gmail.com>.
+
  All rights reserved.  This program is free software; you can
  redistribute it and/or modify it under the same terms as Perl itself.
 
 REVISION HISTORY
+ 
+ 0.20  Sat Mar  6 14:05:56 EST 2010
+        - six years to the day since last update, maybe it's time...
+        - various new cheat commands:
+           - Enchanter series:
+              - "gmacho": emulate "gnusto" spell: copies ANY spell 
+                 to spellbook, even powerful ones where this is not
+                 normally allowed
+              - "verdelivre": attempt to copy ALL spells to spellbook
+           - "angiotensin": automatically manage blood pressure 
+                            in "Bureaucracy"
+           - "voluminus": expand capacity of a container
+             (Zork I only at the moment)
+        - bug fixes:
+           - fix inappropriate typo correction
+           - "omap" cheat fixed in Sorcerer (premature end to object
+              list parsing)
+           - ZIO_Tk: various fixes
+           - ZIO_Win32: screen buffer size fix
+        - new ZIO_Test.pm, simplest possible ZIO, good for testing 
+          and accepting commands from STDIN.  Maybe now CPAN testing 
+          will work more consistently...
+        - thanks to "Oliver Klozoff" (nee Stephen Oberholtzer) 
+          and Neil Bowers for bug reports and patches.
 
  0.19  Sat Mar  6 15:30:00 EST 2004
         - Optional speech synthesis ("-speak") and recognition ("-listen").
